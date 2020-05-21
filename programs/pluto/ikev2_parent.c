@@ -1872,7 +1872,8 @@ static stf_status ikev2_parent_inR1outI2_tail(struct state *pst, struct msg_dige
 	 */
 	if (LIN(POLICY_PPK_ALLOW, pc->policy) && ike->sa.st_seen_ppk) {
 		chunk_t *ppk_id;
-		chunk_t *ppk = get_ppk(ike->sa.st_connection, &ppk_id);
+		chunk_t *ppk = get_ppk(ike->sa.st_connection, &ppk_id,
+				       ike->sa.st_logger);
 
 		if (ppk != NULL) {
 			DBG(DBG_CONTROL, DBG_log("found PPK and PPK_ID for our connection"));
@@ -2206,8 +2207,7 @@ static stf_status ikev2_parent_inR1outI2_auth_signature_continue(struct ike_sa *
 	/* send out the AUTH payload */
 
 	if (!emit_v2_auth(ike, auth_sig, &ike->sa.st_v2_id_payload.mac, &sk.pbs)) {
-		v2_msgid_switch_responder_from_child(ike, pexpect_child_sa(cst), md, HERE);
-		discard_state(&cst);
+		v2_msgid_switch_responder_from_aborted_child(ike, &child, md, HERE);
 		return STF_INTERNAL_ERROR;
 	}
 
@@ -2313,7 +2313,8 @@ static stf_status ikev2_parent_inR1outI2_auth_signature_continue(struct ike_sa *
 	 */
 	if (pst->st_seen_ppk) {
 		chunk_t *ppk_id;
-		get_ppk(ike->sa.st_connection, &ppk_id);
+		get_ppk(ike->sa.st_connection, &ppk_id,
+			ike->sa.st_logger);
 		struct ppk_id_payload ppk_id_p = { .type = 0, };
 		create_ppk_id_payload(ppk_id, &ppk_id_p);
 		if (DBGP(DBG_BASE)) {
@@ -3038,8 +3039,7 @@ static stf_status ike_auth_child_responder(struct ike_sa *ike,
 		 * continue to exist.  This STF_FAIL will blame MD->ST
 		 * aka the IKE SA.
 		 */
-		v2_msgid_switch_responder_from_child(ike, child, md, HERE);
-		delete_state(&child->sa);
+		v2_msgid_switch_responder_from_aborted_child(ike, &child, md, HERE);
 		return STF_FAIL; /* XXX: better? */
 	}
 	*child_out = child;
@@ -3064,9 +3064,8 @@ static stf_status ikev2_parent_inI2outR2_auth_signature_continue(struct ike_sa *
 	 * transitions for the IKE and CHILD SAs and then have the IKE
 	 * SA invoke the CHILD SA's transition.
 	 */
-	pexpect(md->svm->next_state == STATE_V2_IPSEC_R);
-	ikev2_ike_sa_established(pexpect_ike_sa(st), md->svm,
-				 STATE_PARENT_R2);
+	pexpect(md->svm->next_state == STATE_V2_ESTABLISHED_CHILD_SA);
+	ikev2_ike_sa_established(ike, md->svm, STATE_V2_ESTABLISHED_IKE_SA);
 
 	if (LHAS(st->hidden_variables.st_nat_traversal, NATED_HOST)) {
 		/* ensure we run keepalives if needed */
@@ -3717,8 +3716,8 @@ static stf_status v2_inR2_post_cert_decode(struct state *st, struct msg_digest *
 	 * transitions for the IKE and CHILD SAs and then have the IKE
 	 * SA invoke the CHILD SA's transition.
 	 */
-	pexpect(md->svm->next_state == STATE_V2_IPSEC_I);
-	ikev2_ike_sa_established(pexpect_ike_sa(pst), md->svm, STATE_PARENT_I3);
+	pexpect(md->svm->next_state == STATE_V2_ESTABLISHED_CHILD_SA);
+	ikev2_ike_sa_established(pexpect_ike_sa(pst), md->svm, STATE_V2_ESTABLISHED_IKE_SA);
 
 	if (LHAS(st->hidden_variables.st_nat_traversal, NATED_HOST)) {
 		/* ensure we run keepalives if needed */
@@ -5379,7 +5378,7 @@ stf_status process_encrypted_informational_ikev2(struct ike_sa *ike,
 		 * Even if there are are other Delete Payloads,
 		 * they cannot matter: we delete the family.
 		 */
-		delete_my_family(&ike->sa, true);
+		delete_ike_family(ike, DONT_SEND_DELETE);
 		md->st = NULL;
 		ike = NULL;
 	} else if (!responding && md->chain[ISAKMP_NEXT_v2D] == NULL) {
@@ -5395,8 +5394,9 @@ stf_status process_encrypted_informational_ikev2(struct ike_sa *ike,
 		 * so no point processing the other Delete SA payloads.
 		 * We won't catch nonsense in those payloads.
 		 *
-		 * But wait: we cannot delete the IKE SA until after we've sent
-		 * the response packet.  To be continued...
+		 * But wait: we cannot delete the IKE SA until after
+		 * we've sent the response packet.  To be continued
+		 * below ...
 		 */
 		passert(responding);
 	} else {
@@ -5461,7 +5461,7 @@ stf_status process_encrypted_informational_ikev2(struct ike_sa *ike,
 							      v2del->isad_protoid), ntohl((uint32_t)spi));
 
 						/* we just received a delete, don't send another delete */
-						dst->sa.st_suppress_del_notify = TRUE;
+						dst->sa.st_dont_send_delete = true;
 						/* st is a parent */
 						passert(&ike->sa != &dst->sa);
 						passert(ike->sa.st_serialno == dst->sa.st_clonedfrom);
@@ -5566,15 +5566,19 @@ stf_status process_encrypted_informational_ikev2(struct ike_sa *ike,
 		 * When DEL_IKE, the update isn't needed but what
 		 * ever.
 		 */
-		dbg_v2_msgid(ike, &ike->sa, "XXX: in %s() hacking around record 'n' send bypassing send queue hacking around delete_my_family()",
+		dbg_v2_msgid(ike, &ike->sa, "XXX: in %s() hacking around record 'n' send bypassing send queue hacking around delete_ike_family()",
 			     __func__);
 		v2_msgid_update_sent(ike, &ike->sa, md, MESSAGE_RESPONSE);
 
 		mobike_reset_remote(&ike->sa, &mobike_remote);
 
-		/* Now we can delete the IKE SA if we want to */
+		/*
+		 * ... now we can delete the IKE SA if we want to.
+		 *
+		 * The response is hopefully empty.
+		 */
 		if (del_ike) {
-			delete_my_family(&ike->sa, true);
+			delete_ike_family(ike, DONT_SEND_DELETE);
 			md->st = NULL;
 			ike = NULL;
 		}
@@ -5953,6 +5957,7 @@ static void initiate_mobike_probe(struct state *st, struct starter_end *this,
 static const struct iface_port *ikev2_src_iface(struct state *st,
 						struct starter_end *this)
 {
+	struct fd *whackfd = whack_log_fd; /* placeholder */
 	/* success found a new source address */
 	pexpect_st_local_endpoint(st);
 	ip_endpoint local_endpoint = endpoint(&this->addr, endpoint_hport(&st->st_interface->local_endpoint));
@@ -5961,7 +5966,7 @@ static const struct iface_port *ikev2_src_iface(struct state *st,
 		endpoint_buf b;
 		dbg("#%lu no interface for %s try to initialize",
 		    st->st_serialno, str_endpoint(&local_endpoint, &b));
-		find_ifaces(FALSE);
+		find_ifaces(false, whackfd);
 		iface = find_iface_port_by_local_endpoint(&local_endpoint);
 		if (iface ==  NULL) {
 			return NULL;

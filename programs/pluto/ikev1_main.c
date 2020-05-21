@@ -304,7 +304,9 @@ struct hash_signature v1_sign_hash_RSA(const struct connection *c,
 				       const struct crypt_mac *hash,
 				       struct logger *logger)
 {
-	const struct private_key_stuff *pks = get_connection_private_key(c, &pubkey_type_rsa);
+	const struct private_key_stuff *pks =
+		get_connection_private_key(c, &pubkey_type_rsa,
+					   logger);
 	if (pks == NULL) {
 		return (struct hash_signature) { .len = 0, }; /* failure: no key to use */
 	}
@@ -1709,7 +1711,7 @@ stf_status main_inI3_outR3(struct state *st, struct msg_digest *md)
 		}
 	}
 
-	ISAKMP_SA_established(st);
+	IKE_SA_established(pexpect_ike_sa(st));
 #ifdef USE_XFRM_INTERFACE
 	if (c->xfrmi != NULL && c->xfrmi->if_id != yn_no)
 		if (add_xfrmi(c, st->st_logger))
@@ -1764,7 +1766,7 @@ stf_status main_inR3(struct state *st, struct msg_digest *md)
 		}
 	}
 
-	ISAKMP_SA_established(st);
+	IKE_SA_established(pexpect_ike_sa(st));
 #ifdef USE_XFRM_INTERFACE
 	if (c->xfrmi != NULL && c->xfrmi->if_id != yn_no)
 		if (add_xfrmi(c, st->st_logger))
@@ -2464,7 +2466,8 @@ bool accept_delete(struct msg_digest *md,
 					if (!shared_phase1_connection(rc)) {
 						flush_pending_by_connection(rc);
 						/* why loop? there can be only one IKE SA, just delete_state(st) ? */
-						delete_states_by_connection(rc, FALSE);
+						delete_states_by_connection(rc, FALSE,
+									    null_fd/*no-whack?*/);
 						md->st = NULL;
 					}
 					reset_cur_connection();

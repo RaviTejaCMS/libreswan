@@ -173,10 +173,15 @@ struct end {
 	bool key_from_DNS_on_demand;
 	bool has_client;
 	bool has_client_wildcard;
-	bool has_port_wildcard;
 	bool has_id_wildcards;
 	char *updown;
 	uint16_t host_port;		/* where the IKE port is */
+	/*
+	 * Was the PORT, in the PROTOPORT included in the whack
+	 * message "wild"?  Can't use .port as that will have been
+	 * scribbled on by a negotiation :-(
+	 */
+	bool has_port_wildcard;
 	uint16_t port;			/* port number, if per-port keying */
 	uint8_t protocol;		/* transport-protocol number, if per-X keying */
 
@@ -421,11 +426,12 @@ extern void initiate_ondemand(const ip_address *our_client,
 			      struct xfrm_user_sec_ctx_ike *uctx,
 			      const char *why);
 
-extern void terminate_connection(const char *name, bool quiet);
-extern void release_connection(struct connection *c, bool relations);
+extern void terminate_connection(const char *name, bool quiet,
+				 struct fd *whack);
+extern void release_connection(struct connection *c, bool relations, struct fd *whackfd);
 extern void delete_connection(struct connection *c, bool relations);
-extern void suppress_delete(struct connection *c);
-extern void delete_connections_by_name(const char *name, bool strict);
+extern void delete_connections_by_name(const char *name, bool strict,
+				       struct fd *whack);
 extern void delete_every_connection(void);
 extern char *add_group_instance(const struct fd *whack,
 				struct connection *group,

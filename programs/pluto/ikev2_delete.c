@@ -125,52 +125,32 @@ static stf_status send_v2_delete_child_request(struct ike_sa *ike,
  * XXX: where to put this?
  */
 
-static const struct state_v2_microcode v2_delete_ike_i = {
+static const struct state_v2_microcode v2_delete_ike = {
 	.story = "delete IKE SA",
-	.state = STATE_PARENT_I3,
+	.state = STATE_V2_ESTABLISHED_IKE_SA,
 	.next_state = STATE_IKESA_DEL,
 	.send = MESSAGE_REQUEST,
 	.processor = send_v2_delete_ike_request,
 	.timeout_event =  EVENT_RETAIN,
 };
 
-static const struct state_v2_microcode v2_delete_ike_r = {
-	.story = "delete IKE SA",
-	.state = STATE_PARENT_R2,
-	.next_state = STATE_IKESA_DEL,
-	.send = MESSAGE_REQUEST,
-	.processor = send_v2_delete_ike_request,
-	.timeout_event =  EVENT_RETAIN,
-};
-
-static const struct state_v2_microcode v2_delete_child_i = {
+static const struct state_v2_microcode v2_delete_child = {
 	.story = "delete CHILD SA",
-	.state = STATE_V2_IPSEC_I,
+	.state = STATE_V2_ESTABLISHED_CHILD_SA,
 	.next_state = STATE_CHILDSA_DEL,
 	.send = MESSAGE_REQUEST,
 	.processor = send_v2_delete_child_request,
 	.timeout_event =  EVENT_RETAIN,
 };
 
-static const struct state_v2_microcode v2_delete_child_r = {
-	.story = "delete CHILD SA",
-	.state = STATE_V2_IPSEC_R,
-	.next_state = STATE_CHILDSA_DEL,
-	.send = MESSAGE_REQUEST,
-	.processor = send_v2_delete_child_request,
-	.timeout_event =  EVENT_RETAIN,
-};
-
-static const struct state_v2_microcode *transitions[SA_TYPE_ROOF][SA_ROLE_ROOF] = {
-	[IKE_SA][SA_INITIATOR] = &v2_delete_ike_i,
-	[IKE_SA][SA_RESPONDER] = &v2_delete_ike_r,
-	[IPSEC_SA][SA_INITIATOR] = &v2_delete_child_i,
-	[IPSEC_SA][SA_RESPONDER] = &v2_delete_child_r,
+static const struct state_v2_microcode *transitions[SA_TYPE_ROOF] = {
+	[IKE_SA] = &v2_delete_ike,
+	[IPSEC_SA] = &v2_delete_child,
 };
 
 void initiate_v2_delete(struct ike_sa *ike, struct state *st)
 {
-	const struct state_v2_microcode *transition = transitions[st->st_establishing_sa][st->st_sa_role];
+	const struct state_v2_microcode *transition = transitions[st->st_establishing_sa];
 	if (st->st_state->kind != transition->state) {
 		log_state(RC_LOG, st, "in state %s but need state %s to initiate delete",
 			  st->st_state->short_name,

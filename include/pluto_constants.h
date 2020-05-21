@@ -518,18 +518,16 @@ enum state_kind {
 	 */
 	STATE_IKEv2_FLOOR,
 
-	/* IKE SA INITIATOR states */
+	/* IKE SA */
 
 	STATE_PARENT_I0 = STATE_IKEv2_FLOOR,	/* waiting for KE to finish */
 	STATE_PARENT_I1,        /* IKE_SA_INIT: sent initial message, waiting for reply */
 	STATE_PARENT_I2,        /* IKE_AUTH: sent auth message, waiting for reply */
-	STATE_PARENT_I3,        /* IKE_AUTH done: received auth response */
-
-	/* IKE_SA RESPONDER states */
 
 	STATE_PARENT_R0,	/* just starting */
 	STATE_PARENT_R1,	/* IKE_SA_INIT: sent response */
-	STATE_PARENT_R2,	/* IKE_AUTH: sent response */
+
+	STATE_V2_ESTABLISHED_IKE_SA,
 
 	/* IKE exchange can also create a child */
 
@@ -547,15 +545,13 @@ enum state_kind {
 	STATE_V2_REKEY_CHILD_I0,	/* larval: sent nothing yet */
 	STATE_V2_REKEY_CHILD_I1,	/* sent first message (via parent to rekey child sa. */
 
-	STATE_V2_IPSEC_I,		/* IPsec SA final state - CREATE_CHILD & AUTH */
-
 	/* IKEv2 CREATE_CHILD_SA Responder states */
 
 	STATE_V2_NEW_CHILD_R0,		/* larval: sent nothing yet. */
 	STATE_V2_REKEY_IKE_R0,		/* larval: sent nothing yet terminal state STATE_PARENT_R2 */
 	STATE_V2_REKEY_CHILD_R0,	/* larval: sent nothing yet. */
 
-	STATE_V2_IPSEC_R,		/* IPsec SA final state - CREATE_CHILD & AUTH */
+	STATE_V2_ESTABLISHED_CHILD_SA,	/* IPsec SA final state - CREATE_CHILD & AUTH */
 
 	/* IKEv2 Delete States */
 	STATE_IKESA_DEL,
@@ -679,8 +675,7 @@ extern struct keywords sa_role_names;
 				       LELEM(STATE_MODE_CFG_I1) | \
 				       LELEM(STATE_XAUTH_I0) | \
 				       LELEM(STATE_XAUTH_I1) | \
-				       LELEM(STATE_PARENT_I3) | \
-				       LELEM(STATE_PARENT_R2))
+				       LELEM(STATE_V2_ESTABLISHED_IKE_SA))
 
 #define IS_ISAKMP_SA_ESTABLISHED(s) ((LELEM(s->kind) & ISAKMP_SA_ESTABLISHED_STATES) != LEMPTY)
 
@@ -691,12 +686,11 @@ extern struct keywords sa_role_names;
 				LELEM(STATE_PARENT_I2))
 
 /* IKEv1 or IKEv2 */
-#define IS_IPSEC_SA_ESTABLISHED(s) (IS_CHILD_SA(s) && \
+#define IS_IPSEC_SA_ESTABLISHED(s) (IS_CHILD_SA(s) &&			\
 				    ((s->st_state->kind) == STATE_QUICK_I2 || \
-				    (s->st_state->kind) == STATE_QUICK_R1 || \
-				    (s->st_state->kind) == STATE_QUICK_R2 || \
-				    (s->st_state->kind) == STATE_V2_IPSEC_I || \
-				    (s->st_state->kind) == STATE_V2_IPSEC_R))
+				     (s->st_state->kind) == STATE_QUICK_R1 || \
+				     (s->st_state->kind) == STATE_QUICK_R2 || \
+				     (s->st_state->kind) == STATE_V2_ESTABLISHED_CHILD_SA))
 
 #define IS_MODE_CFG_ESTABLISHED(s) ((s->kind) == STATE_MODE_CFG_R2)
 
@@ -704,9 +698,8 @@ extern struct keywords sa_role_names;
 
 /* adding for just a R2 or I3 check. Will need to be changed when parent/child discerning is fixed */
 
-#define IS_V2_ESTABLISHED(s) ((s->kind) == STATE_PARENT_R2 || \
-		(s->kind) == STATE_PARENT_I3 || (s->kind) == STATE_V2_IPSEC_I || \
-		(s->kind) == STATE_V2_IPSEC_R)
+#define IS_V2_ESTABLISHED(s) ((s->kind) == STATE_V2_ESTABLISHED_IKE_SA || \
+			      (s->kind) == STATE_V2_ESTABLISHED_CHILD_SA)
 
 #define IS_IKE_SA_ESTABLISHED(ST) \
 	( IS_ISAKMP_SA_ESTABLISHED((ST)->st_state) ||	\
@@ -718,14 +711,12 @@ extern struct keywords sa_role_names;
  * STATE_PARENT_I3/STATE_PARENT_R2 state which it should not.
  * So we fall back to checking if it is cloned, and therefore really a child.
  */
-#define IS_CHILD_SA_ESTABLISHED(ST)				\
-	(((ST)->st_state->kind == STATE_V2_IPSEC_I		\
-	  || (ST)->st_state->kind == STATE_V2_IPSEC_R) &&	\
+#define IS_CHILD_SA_ESTABLISHED(ST)				  \
+	((ST)->st_state->kind == STATE_V2_ESTABLISHED_CHILD_SA && \
 	 IS_CHILD_SA(ST))
 
-#define IS_PARENT_SA_ESTABLISHED(st) \
-    (((st)->st_state->kind == STATE_PARENT_I3 || (st)->st_state->kind == STATE_PARENT_R2) && \
-    !IS_CHILD_SA(st))
+#define IS_PARENT_SA_ESTABLISHED(st) (((st)->st_state->kind == STATE_V2_ESTABLISHED_IKE_SA) && \
+				      !IS_CHILD_SA(st))
 
 #define IS_CHILD_SA(st)  ((st)->st_clonedfrom != SOS_NOBODY)
 #define IS_IKE_SA(st)	 ((st)->st_clonedfrom == SOS_NOBODY)

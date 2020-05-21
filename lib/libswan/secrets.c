@@ -170,41 +170,6 @@ void form_keyid(chunk_t e, chunk_t n, char *keyid, unsigned *keysize)
 	*keysize = n.len;
 }
 
-static void form_keyid_from_nss(SECItem e, SECItem n, char *keyid,
-				unsigned *keysize)
-{
-	/* eliminate leading zero byte in modulus from ASN.1 coding */
-	if (*n.data == 0x00) {
-		/*
-		 * The "adjusted" length of modulus n in octets:
-		 * [RSA_MIN_OCTETS, RSA_MAX_OCTETS].
-		 *
-		 * According to form_keyid() this is the modulus length
-		 * less any leading byte added by DER encoding.
-		 *
-		 * The adjusted length is used in sign_hash() as the
-		 * signature length - wouldn't PK11_SignatureLen be
-		 * better?
-		 *
-		 * The adjusted length is used in
-		 * same_RSA_public_key() as part of comparing two keys
-		 * - but wouldn't that be redundant?  The direct n==n
-		 * test would pick up the difference.
-		 */
-		DBG(DBG_CRYPT, DBG_log("XXX: adjusted modulus length %u->%u",
-				       n.len, n.len - 1));
-		n.data++;
-		n.len--;
-	}
-
-	/* form the Libreswan keyid */
-	keyid[0] = '\0';	/* in case of splitkeytoid failure */
-	splitkeytoid(e.data, e.len, n.data, n.len, keyid, KEYID_BUF);
-
-	/* return the RSA modulus size in octets */
-	*keysize = n.len;
-}
-
 static err_t RSA_unpack_pubkey_content(union pubkey_content *u, chunk_t pubkey)
 {
 	return unpack_RSA_public_key(&u->rsa, &pubkey);
@@ -221,18 +186,31 @@ static void RSA_free_pubkey_content(union pubkey_content *u)
 	RSA_free_public_content(&u->rsa);
 }
 
-static void RSA_unpack_secret_content(struct private_key_stuff *pks,
-				      SECKEYPublicKey *pubk,
-				      SECItem *cert_ckaid)
+static void extract_RSA_public_key(struct RSA_public_key *pub,
+				   SECKEYPublicKey *pubk,
+				   SECItem *cert_ckaid)
+{
+	pub->e = clone_bytes_as_chunk(pubk->u.rsa.publicExponent.data,
+					   pubk->u.rsa.publicExponent.len, "e");
+	pub->n = clone_bytes_as_chunk(pubk->u.rsa.modulus.data,
+					   pubk->u.rsa.modulus.len, "n");
+	pub->ckaid = ckaid_from_secitem(cert_ckaid);
+	form_keyid(pub->e, pub->n, pub->keyid, &pub->k);
+}
+
+static void RSA_extract_pubkey_content(union pubkey_content *pkc,
+				       SECKEYPublicKey *pubkey_nss,
+				       SECItem *ckaid_nss)
+{
+	extract_RSA_public_key(&pkc->rsa, pubkey_nss, ckaid_nss);
+}
+
+static void RSA_extract_private_key_stuff(struct private_key_stuff *pks,
+					  SECKEYPublicKey *pubkey_nss,
+					  SECItem *ckaid_nss)
 {
 	struct RSA_private_key *rsak = &pks->u.RSA_private_key;
-	rsak->pub.e = clone_bytes_as_chunk(pubk->u.rsa.publicExponent.data,
-					   pubk->u.rsa.publicExponent.len, "e");
-	rsak->pub.n = clone_bytes_as_chunk(pubk->u.rsa.modulus.data,
-					   pubk->u.rsa.modulus.len, "n");
-	rsak->pub.ckaid = ckaid_from_secitem(cert_ckaid);
-	form_keyid_from_nss(pubk->u.rsa.publicExponent, pubk->u.rsa.modulus,
-			rsak->pub.keyid, &rsak->pub.k);
+	extract_RSA_public_key(&rsak->pub, pubkey_nss, ckaid_nss);
 }
 
 static void RSA_free_secret_content(struct private_key_stuff *pks)
@@ -298,9 +276,9 @@ static struct hash_signature RSA_sign_hash(const struct private_key_stuff *pks,
 	} else { /* Digital signature scheme with rsa-pss*/
 		const CK_RSA_PKCS_PSS_PARAMS *mech = hash_algo->nss.rsa_pkcs_pss_params;
 		if (mech == NULL) {
-			loglog(RC_LOG_SERIOUS,
-			       "digital signature scheme not supported for hash algorithm %s",
-			       hash_algo->common.fqn);
+			log_message(RC_LOG_SERIOUS, logger,
+				    "digital signature scheme not supported for hash algorithm %s",
+				    hash_algo->common.fqn);
 			return (struct hash_signature) { .len = 0, };
 		}
 
@@ -329,7 +307,8 @@ const struct pubkey_type pubkey_type_rsa = {
 	.private_key_kind = PKK_RSA,
 	.free_pubkey_content = RSA_free_pubkey_content,
 	.unpack_pubkey_content = RSA_unpack_pubkey_content,
-	.unpack_secret_content = RSA_unpack_secret_content,
+	.extract_pubkey_content = RSA_extract_pubkey_content,
+	.extract_private_key_stuff = RSA_extract_private_key_stuff,
 	.free_secret_content = RSA_free_secret_content,
 	.secret_sane = RSA_secret_sane,
 	.sign_hash = RSA_sign_hash,
@@ -358,23 +337,42 @@ static void ECDSA_free_pubkey_content(union pubkey_content *u)
 	ECDSA_free_public_content(&u->ecdsa);
 }
 
-static void ECDSA_unpack_secret_content(struct private_key_stuff *pks,
-					SECKEYPublicKey *pubk,
-					SECItem *cert_ckaid)
+static void extract_ECDSA_public_key(struct ECDSA_public_key *pub,
+				     SECKEYPublicKey *pubkey_nss,
+				     SECItem *ckaid_nss)
+{
+	pub->pub = clone_secitem_as_chunk(pubkey_nss->u.ec.publicValue, "ECDSA pub");
+	pub->ecParams = clone_secitem_as_chunk(pubkey_nss->u.ec.DEREncodedParams, "ECDSA ecParams");
+	pub->k = pubkey_nss->u.ec.publicValue.len;
+	pub->ckaid = ckaid_from_secitem(ckaid_nss);
+	/* keyid */
+	char keyid[KEYID_BUF] = "";
+	memcpy(keyid, pubkey_nss->u.ec.publicValue.data, KEYID_BUF-1);
+	if (DBGP(DBG_BASE)) {
+		DBG_dump("keyid", keyid, KEYID_BUF-1);
+	}
+	keyblobtoid((const unsigned char *)keyid, KEYID_BUF,
+		    pub->keyid, KEYID_BUF);
+	if (DBGP(DBG_CRYPT)) {
+		DBG_log("k %u", pub->k);
+		DBG_dump_hunk("pub", pub->pub);
+		DBG_dump_hunk("ecParams", pub->ecParams);
+	}
+}
+
+static void ECDSA_extract_pubkey_content(union pubkey_content *pkc,
+					 SECKEYPublicKey *pubkey_nss,
+					 SECItem *ckaid_nss)
+{
+	extract_ECDSA_public_key(&pkc->ecdsa, pubkey_nss, ckaid_nss);
+}
+
+static void ECDSA_extract_private_key_stuff(struct private_key_stuff *pks,
+					    SECKEYPublicKey *pubkey_nss,
+					    SECItem *ckaid_nss)
 {
 	struct ECDSA_private_key *ecdsak = &pks->u.ECDSA_private_key;
-	ecdsak->pub.pub = clone_bytes_as_chunk(pubk->u.ec.publicValue.data,
-					       pubk->u.ec.publicValue.len, "pub");
-	ecdsak->pub.ckaid = ckaid_from_secitem(cert_ckaid);
-	/* keyid */
-	char keyid[KEYID_BUF];
-	memset(keyid, 0, KEYID_BUF);
-	memcpy(keyid, pubk->u.ec.publicValue.data, KEYID_BUF-1);
-	memset(ecdsak->pub.keyid, 0, KEYID_BUF);
-	keyblobtoid((const unsigned char *)keyid, KEYID_BUF,
-		    ecdsak->pub.keyid, KEYID_BUF);
-	/*size */
-	ecdsak->pub.k = pubk->u.ec.size;
+	extract_ECDSA_public_key(&ecdsak->pub, pubkey_nss, ckaid_nss);
 }
 
 static void ECDSA_free_secret_content(struct private_key_stuff *pks)
@@ -460,10 +458,11 @@ const struct pubkey_type pubkey_type_ecdsa = {
 	.private_key_kind = PKK_ECDSA,
 	.unpack_pubkey_content = ECDSA_unpack_pubkey_content,
 	.free_pubkey_content = ECDSA_free_pubkey_content,
-	.unpack_secret_content = ECDSA_unpack_secret_content,
+	.extract_private_key_stuff = ECDSA_extract_private_key_stuff,
 	.free_secret_content = ECDSA_free_secret_content,
 	.secret_sane = ECDSA_secret_sane,
 	.sign_hash = ECDSA_sign_hash,
+	.extract_pubkey_content = ECDSA_extract_pubkey_content,
 };
 
 const struct pubkey_type *pubkey_alg_type(enum pubkey_alg alg)
@@ -1688,128 +1687,9 @@ void delete_public_keys(struct pubkey_list **head,
 	}
 }
 
-/*
- * Relocated from x509.c for convenience
- */
-struct pubkey *allocate_RSA_public_key_nss(CERTCertificate *cert)
-{
-	ckaid_t ckaid;
-	{
-		SECItem *nss_ckaid = PK11_GetLowLevelKeyIDForCert(NULL, cert,
-								  lsw_return_nss_password_file_info());
-		if (nss_ckaid == NULL) {
-			/* someone deleted CERT from the NSS DB */
-			libreswan_log("NSS: could not extract CKAID from RSA certificate '%s'",
-				      cert->nickname);
-			return NULL;
-		}
-		ckaid = ckaid_from_secitem(nss_ckaid);
-		SECITEM_FreeItem(nss_ckaid, PR_TRUE);
-	}
-	/* free: ckaid */
-
-	chunk_t e;
-	chunk_t n;
-	{
-		SECKEYPublicKey *nsspk = SECKEY_ExtractPublicKey(&cert->subjectPublicKeyInfo);
-		if (nsspk == NULL) {
-			/* someone deleted CERT from the NSS DB */
-			libreswan_log("NSS: could not extract public key from RSA certificate '%s'",
-				      cert->nickname);
-			return NULL;
-		}
-		e = clone_secitem_as_chunk(nsspk->u.rsa.publicExponent, "RSA e");
-		n = clone_secitem_as_chunk(nsspk->u.rsa.modulus, "RSA n");
-		SECKEY_DestroyPublicKey(nsspk);
-	}
-	/* free: ckaid, n, e */
-
-	struct pubkey *pk = alloc_thing(struct pubkey, "RSA pubkey");
-	pk->u.rsa.e = e;
-	pk->u.rsa.n = n;
-	pk->u.rsa.ckaid = ckaid;
-	/*
-	 * based on comments in form_keyid, the modulus length
-	 * returned by NSS might contain a leading zero and this
-	 * ignores that when generating the keyid.
-	 */
-	form_keyid(e, n, pk->u.rsa.keyid, &pk->u.rsa.k);
-
-	/* DBG(DBG_PRIVATE, RSA_show_public_key(&pk->u.rsa)); */
-
-	pk->type = &pubkey_type_rsa;
-	pk->id  = empty_id;
-	pk->issuer = EMPTY_CHUNK;
-
-	return pk;
-}
-
-struct pubkey *allocate_ECDSA_public_key_nss(CERTCertificate *cert)
-{
-	struct pubkey *pk;
-	{
-		SECKEYPublicKey *nsspk = SECKEY_ExtractPublicKey(&cert->subjectPublicKeyInfo);
-		if (nsspk == NULL) {
-			/* someone deleted CERT from the NSS DB */
-			libreswan_log("NSS: could not extract public key from ECDSA certificate '%s'",
-				      cert->nickname);
-			return NULL;
-		}
-
-		/* assume things succeed */
-		pk = alloc_thing(struct pubkey, "ECDSA pubkey");
-
-		pk->u.ecdsa.pub = clone_secitem_as_chunk(nsspk->u.ec.publicValue, "ECDSA pub");
-		if (DBGP(DBG_BASE)) {
-			DBG_dump_hunk("pub", pk->u.ecdsa.pub);
-		}
-
-		pk->u.ecdsa.ecParams = clone_secitem_as_chunk(nsspk->u.ec.DEREncodedParams, "ECDSA ecParams");
-		if (DBGP(DBG_BASE)) {
-			DBG_dump_hunk("ecParams", pk->u.ecdsa.ecParams);
-		}
-
-		/* keyid */
-		char keyid[KEYID_BUF] = "";
-		memcpy(keyid, nsspk->u.ec.publicValue.data, KEYID_BUF-1);
-		if (DBGP(DBG_BASE)) {
-			DBG_dump("keyid", keyid, KEYID_BUF-1);
-		}
-		keyblobtoid((const unsigned char *)keyid, KEYID_BUF,
-			    pk->u.ecdsa.keyid, KEYID_BUF);
-
-		pk->u.ecdsa.k = nsspk->u.ec.publicValue.len;
-
-		SECKEY_DestroyPublicKey(nsspk);
-	}
-
-	/* ckaid */
-	err_t err = form_ckaid_ecdsa(pk->u.ecdsa.pub, &pk->u.ecdsa.ckaid);
-	if (err != NULL) {
-		ECDSA_free_public_content(&pk->u.ecdsa);
-		pfree(pk);
-		return NULL;
-	}
-
-	/*
-	 * based on comments in form_keyid, the modulus length
-	 * returned by NSS might contain a leading zero and this
-	 * ignores that when generating the keyid.
-	 */
-	//form_keyid(e, n, pk->u.rsa.keyid, &pk->u.rsa.k);
-
-	/* DBG(DBG_PRIVATE, RSA_show_public_key(&pk->u.rsa)); */
-
-	pk->type = &pubkey_type_ecdsa;
-	pk->id  = empty_id;
-	pk->issuer = EMPTY_CHUNK;
-
-	return pk;
-}
-
-static err_t add_pubkey_ckaid_secret(struct secret **secrets, const struct pubkey_type *type,
-				     SECKEYPublicKey *pubk, SECItem *cert_ckaid,
-				     CERTCertificate *cert)
+static err_t add_pubkey_secret_5(struct secret **secrets, const struct pubkey_type *type,
+				 SECKEYPublicKey *pubk, SECItem *ckaid_nss,
+				 CERTCertificate *cert)
 {
 	struct secret *s = alloc_thing(struct secret, "pubkey secret");
 	s->pks.pubkey_type = type;
@@ -1828,7 +1708,7 @@ static err_t add_pubkey_ckaid_secret(struct secret **secrets, const struct pubke
 	SECKEY_DestroyPrivateKey(private_key);
 	private_key = NULL;
 
-	type->unpack_secret_content(&s->pks, pubk, cert_ckaid);
+	type->extract_private_key_stuff(&s->pks, pubk, ckaid_nss);
 
 	err_t err = type->secret_sane(&s->pks);
 	if (err != NULL) {
@@ -1841,23 +1721,24 @@ static err_t add_pubkey_ckaid_secret(struct secret **secrets, const struct pubke
 	return NULL;
 }
 
+static const struct pubkey_type *pubkey_type_nss(SECKEYPublicKey *pubk)
+{
+	KeyType key_type = SECKEY_GetPublicKeyType(pubk);
+	switch (key_type) {
+	case rsaKey:
+		return &pubkey_type_rsa;
+	case ecKey:
+		return &pubkey_type_ecdsa;
+	default:
+		return NULL;
+	}
+}
+
 static err_t add_pubkey_secret(struct secret **secrets, CERTCertificate *cert,
 			       SECKEYPublicKey *pubk)
 {
 	/* XXX: see also nss_cert_key_kind(cert) */
-	KeyType key_type = SECKEY_GetPublicKeyType(pubk); /* must destory */
-	const struct pubkey_type *type;
-	switch (key_type) {
-	case rsaKey:
-		type = &pubkey_type_rsa;
-		break;
-	case ecKey:
-		type = &pubkey_type_ecdsa;
-		break;
-	default:
-		type = NULL;
-		break;
-	}
+	const struct pubkey_type *type = pubkey_type_nss(pubk);
 	if (type == NULL) {
 		return "NSS cert not supported";
 	}
@@ -1867,29 +1748,29 @@ static err_t add_pubkey_secret(struct secret **secrets, CERTCertificate *cert,
 	 * mean that the private key exists. The data may be empty if
 	 * there's no private key.
 	 */
-	SECItem *cert_ckaid =
+	SECItem *ckaid_nss =
 		PK11_GetLowLevelKeyIDForCert(NULL, cert,
 					     lsw_return_nss_password_file_info()); /* MUST FREE */
 
-	if (cert_ckaid == NULL) {
+	if (ckaid_nss == NULL) {
 		return "NSS: key ID not found";
 	}
 
-	if (cert_ckaid->data == NULL || cert_ckaid->len < 1) {
-		SECITEM_FreeItem(cert_ckaid, PR_TRUE);
+	if (ckaid_nss->data == NULL || ckaid_nss->len < 1) {
+		SECITEM_FreeItem(ckaid_nss, PR_TRUE);
 		return "NSS: no CKAID data";
 	}
 
-	if (find_pubkey_secret_by_ckaid(*secrets, type, cert_ckaid) != NULL) {
-		SECITEM_FreeItem(cert_ckaid, PR_TRUE);
+	if (find_pubkey_secret_by_ckaid(*secrets, type, ckaid_nss) != NULL) {
+		SECITEM_FreeItem(ckaid_nss, PR_TRUE);
 		dbg("secrets entry for certificate already exists: %s", cert->nickname);
 		return NULL;
 	}
 
 	dbg("adding %s secret for certificate: %s", type->name, cert->nickname);
 
-	err_t err = add_pubkey_ckaid_secret(secrets, type, pubk, cert_ckaid, cert);
-	SECITEM_FreeItem(cert_ckaid, PR_TRUE);
+	err_t err = add_pubkey_secret_5(secrets, type, pubk, ckaid_nss, cert);
+	SECITEM_FreeItem(ckaid_nss, PR_TRUE);
 	return err;
 }
 
@@ -1908,4 +1789,53 @@ err_t lsw_add_secret(struct secret **secrets, CERTCertificate *cert)
 	err_t err = add_pubkey_secret(secrets, cert, pubk);
 	SECKEY_DestroyPublicKey(pubk);
 	return err;
+}
+
+static struct pubkey *allocate_pubkey_nss_3(CERTCertificate *cert,
+					    SECKEYPublicKey *pubkey_nss,
+					    struct logger *logger)
+{
+	const struct pubkey_type *type = pubkey_type_nss(pubkey_nss);
+	if (type == NULL) {
+		log_message(RC_LOG, logger,
+			    "NSS: certificate key kind is unknown; not creating pubkey");
+		return NULL;
+	}
+
+	SECItem *ckaid_nss = PK11_GetLowLevelKeyIDForCert(NULL, cert,
+							  lsw_return_nss_password_file_info()); /* must free */
+	if (ckaid_nss == NULL) {
+		/* someone deleted CERT from the NSS DB */
+		log_message(RC_LOG, logger,
+			    "NSS: could not extract CKAID from RSA certificate '%s'",
+			    cert->nickname);
+		return NULL;
+	}
+
+	struct pubkey *pk = alloc_thing(struct pubkey, "RSA pubkey");
+	pk->type = type;
+	pk->id = empty_id;
+	pk->issuer = empty_chunk;
+	type->extract_pubkey_content(&pk->u, pubkey_nss, ckaid_nss);
+	SECITEM_FreeItem(ckaid_nss, PR_TRUE);
+	return pk;
+}
+
+struct pubkey *allocate_pubkey_nss(CERTCertificate *cert, struct logger *logger)
+{
+	if (!pexpect(cert != NULL)) {
+		return NULL;
+	}
+
+	SECKEYPublicKey *pubkey_nss = SECKEY_ExtractPublicKey(&cert->subjectPublicKeyInfo); /* must free */
+	if (pubkey_nss == NULL) {
+		log_message(RC_LOG, logger,
+			    "NSS: could not extract public key from certificate '%s'",
+			    cert->nickname);
+		return NULL;
+	}
+
+	struct pubkey *pubkey = allocate_pubkey_nss_3(cert, pubkey_nss, logger);
+	SECKEY_DestroyPublicKey(pubkey_nss);
+	return pubkey;
 }

@@ -141,7 +141,7 @@ struct connection *conn_by_name(const char *nm, bool strict)
 	return p;
 }
 
-void release_connection(struct connection *c, bool relations)
+void release_connection(struct connection *c, bool relations, struct fd *whackfd)
 {
 	if (c->kind == CK_INSTANCE) {
 		/*
@@ -152,7 +152,7 @@ void release_connection(struct connection *c, bool relations)
 		delete_connection(c, relations);
 	} else {
 		flush_pending_by_connection(c);
-		delete_states_by_connection(c, relations);
+		delete_states_by_connection(c, relations, whackfd);
 		unroute_connection(c);
 	}
 }
@@ -193,10 +193,7 @@ static void discard_connection(struct connection *c,
 
 void delete_connection(struct connection *c, bool relations)
 {
-	/* make a copy of the logger so it works even after the delete */
-	struct logger tmp = CONNECTION_LOGGER(c, whack_log_fd);
-	struct logger *connection_logger = clone_logger(&tmp); /* must-free */
-
+	struct fd *whackfd = whack_log_fd;
 	struct connection *old_cur_connection = push_cur_connection(c);
 	if (old_cur_connection == c) {
 		old_cur_connection = NULL;
@@ -210,17 +207,20 @@ void delete_connection(struct connection *c, bool relations)
 	if (c->kind == CK_INSTANCE) {
 		if ((c->policy & POLICY_OPPORTUNISTIC) == LEMPTY) {
 			address_buf b;
-			log_message(RC_LOG, connection_logger,
-				    "deleting connection instance with peer %s {isakmp=#%lu/ipsec=#%lu}",
-				    str_address_sensitive(&c->spd.that.host_addr, &b),
-				    c->newest_isakmp_sa, c->newest_ipsec_sa);
+			log_connection(RC_LOG, whackfd, c,
+				       "deleting connection instance with peer %s {isakmp=#%lu/ipsec=#%lu}",
+				       str_address_sensitive(&c->spd.that.host_addr, &b),
+				       c->newest_isakmp_sa, c->newest_ipsec_sa);
 		}
 		c->kind = CK_GOING_AWAY;
 		if (c->pool != NULL)
 			rel_lease_addr(c);
 	}
-	release_connection(c, relations); /* won't delete c */
+	release_connection(c, relations, whackfd); /* won't delete c */
 	pop_cur_connection(old_cur_connection);
+	/* make a copy of the logger so it works even after the delete */
+	struct logger tmp = CONNECTION_LOGGER(c, whack_log_fd);
+	struct logger *connection_logger = clone_logger(&tmp); /* must-free */
 	discard_connection(c, true/*connection_valid*/, connection_logger);
 	free_logger(&connection_logger);
 }
@@ -338,9 +338,8 @@ static int delete_connection_wrap(struct connection *c,
 }
 
 /* Delete connections with the specified name */
-void delete_connections_by_name(const char *name, bool strict)
+void delete_connections_by_name(const char *name, bool strict, struct fd *whackfd)
 {
-	struct fd *whackfd = whack_log_fd; /* placeholder */
 	bool f = FALSE;
 
 	passert(name != NULL);
@@ -790,9 +789,9 @@ static int extract_end(struct fd *whackfd,
 
 	dst->authby = src->authby;
 
-	dst->protocol = src->protocol;
-	dst->port = src->port;
-	dst->has_port_wildcard = src->has_port_wildcard;
+	dst->protocol = src->protoport.protocol;
+	dst->port = src->protoport.port;
+	dst->has_port_wildcard = protoport_has_any_port(&src->protoport);
 	dst->key_from_DNS_on_demand = src->key_from_DNS_on_demand;
 	dst->has_client = src->has_client;
 	dst->has_client_wildcard = src->has_client_wildcard;
@@ -892,6 +891,12 @@ static bool check_connection_end(const struct whack_end *this,
 		}
 	}
 
+	if (this->protoport.protocol == 0 && this->protoport.port != 0) {
+		loglog(RC_ORIENT, "connection %s cannot specify non-zero port %d for prototcol 0",
+			wm->name, this->protoport.port);
+		return FALSE;
+	}
+
 	return TRUE; /* happy */
 }
 
@@ -900,6 +905,7 @@ static bool load_end_cert_and_preload_secret(struct fd *whackfd,
 					     enum whack_pubkey_type pubkey_type,
 					     struct end *dst_end)
 {
+	struct logger logger[] = { GLOBAL_LOGGER(whackfd), };
 	dst_end->cert.ty = CERT_NONE;
 	dst_end->cert.u.nss_cert = NULL;
 
@@ -911,9 +917,9 @@ static bool load_end_cert_and_preload_secret(struct fd *whackfd,
 		cert_source = "nickname";
 		cert = get_cert_by_nickname_from_nss(pubkey);
 		if (cert == NULL) {
-			loglog_global(RC_LOG_SERIOUS, whackfd,
-				      "failed to find certificate named '%s' in the NSS database",
-				      pubkey);
+			log_message(RC_LOG_SERIOUS, logger,
+				    "failed to find certificate named '%s' in the NSS database",
+				    pubkey);
 			return false;
 		}
 		break;
@@ -938,14 +944,14 @@ static bool load_end_cert_and_preload_secret(struct fd *whackfd,
 		err_t err = string_to_ckaid(pubkey, &ckaid);
 		if (err != NULL) {
 			/* should have been rejected by whack? */
-			log_global(RC_LOG, whackfd, "invalid hex CKAID '%s': %s", pubkey, err);
+			log_message(RC_LOG, logger, "invalid hex CKAID '%s': %s", pubkey, err);
 			return false;
 		}
 		cert = get_cert_by_ckaid_from_nss(&ckaid);
 		if (cert == NULL) {
-			loglog_global(RC_LOG_SERIOUS, whackfd,
-				      "failed to find certificate ckaid '%s' in the NSS database",
-				      pubkey);
+			log_message(RC_LOG_SERIOUS, logger,
+				    "failed to find certificate ckaid '%s' in the NSS database",
+				    pubkey);
 			return false;
 		}
 		break;
@@ -954,8 +960,8 @@ static bool load_end_cert_and_preload_secret(struct fd *whackfd,
 		pexpect(pubkey == NULL);
 		return true;
 	default:
-		loglog_global(RC_LOG_SERIOUS, whackfd,
-			      "warning: unknown pubkey '%s' of type %d", pubkey, pubkey_type);
+		log_message(RC_LOG_SERIOUS, logger,
+			    "warning: unknown pubkey '%s' of type %d", pubkey, pubkey_type);
 		/* recoverable screwup? */
 		return true;
 	}
@@ -973,11 +979,11 @@ static bool load_end_cert_and_preload_secret(struct fd *whackfd,
 		SECKEYPublicKey *pk = CERT_ExtractPublicKey(cert);
 		passert(pk != NULL);
 		if (pk->keyType == rsaKey &&
-			((pk->u.rsa.modulus.len * BITS_PER_BYTE) < FIPS_MIN_RSA_KEY_SIZE)) {
-				loglog_global(RC_FATAL, whackfd,
-				      "FIPS: Rejecting cert with key size %d which is under %d",
-				      pk->u.rsa.modulus.len * BITS_PER_BYTE,
-				      FIPS_MIN_RSA_KEY_SIZE);
+		    ((pk->u.rsa.modulus.len * BITS_PER_BYTE) < FIPS_MIN_RSA_KEY_SIZE)) {
+			log_message(RC_FATAL, logger,
+				    "FIPS: Rejecting cert with key size %d which is under %d",
+				    pk->u.rsa.modulus.len * BITS_PER_BYTE,
+				    FIPS_MIN_RSA_KEY_SIZE);
 			SECKEY_DestroyPublicKey(pk);
 			CERT_DestroyCertificate(cert);
 			return false;
@@ -992,15 +998,15 @@ static bool load_end_cert_and_preload_secret(struct fd *whackfd,
 	/* check validity of cert */
 	if (CERT_CheckCertValidTimes(cert, PR_Now(), FALSE) !=
 			secCertTimeValid) {
-		loglog_global(RC_LOG_SERIOUS, whackfd,
-			      "%s certificate \'%s\' is expired or not yet valid",
-			      which, pubkey);
+		log_message(RC_LOG_SERIOUS, logger,
+			    "%s certificate \'%s\' is expired or not yet valid",
+			    which, pubkey);
 		CERT_DestroyCertificate(cert);
 		return false;
 	}
 
 	dbg("loading %s certificate \'%s\' pubkey", which, pubkey);
-	if (!add_pubkey_from_nss_cert(&pluto_pubkeys, &dst_end->id, cert)) {
+	if (!add_pubkey_from_nss_cert(&pluto_pubkeys, &dst_end->id, cert, logger)) {
 		CERT_DestroyCertificate(cert);
 		return false;
 	}
@@ -1310,10 +1316,11 @@ static bool extract_connection(struct fd *whackfd,
 		}
 	}
 
-	if (wm->right.has_port_wildcard && wm->left.has_port_wildcard) {
-		loglog(RC_FATAL,
-			"Failed to add connection \"%s\": cannot have protoport with %%any on both sides",
-				wm->name);
+	if (protoport_has_any_port(&wm->right.protoport) &&
+	    protoport_has_any_port(&wm->left.protoport)) {
+		log_global(RC_FATAL, whackfd,
+			   "failed to add connection \"%s\": cannot have protoport with %%any on both sides",
+			   wm->name);
 		return false;
 	}
 	if (!check_connection_end(&wm->right, &wm->left, wm) ||
@@ -1975,9 +1982,10 @@ char *add_group_instance(const struct fd *whackfd,
 void remove_group_instance(const struct connection *group,
 			const char *name)
 {
+	struct fd *whackfd = whack_log_fd; /* placeholder */
 	passert(group->kind == CK_GROUP);
 
-	delete_connections_by_name(name, FALSE);
+	delete_connections_by_name(name, false, whackfd);
 }
 
 /*
@@ -2832,7 +2840,7 @@ struct connection *refine_host_connection(const struct state *st,
 	{
 		switch (this_authby) {
 		case AUTHBY_PSK:
-			psk = get_psk(c);
+			psk = get_psk(c, st->st_logger);
 			/*
 			 * It should be virtually impossible to fail to find
 			 * PSK: we just used it to decode the current message!
@@ -2855,7 +2863,7 @@ struct connection *refine_host_connection(const struct state *st,
 			 * message.  Paul: only true for IKEv1
 			 */
 			const struct pubkey_type *type = &pubkey_type_rsa;
-			if (get_connection_private_key(c, type) == NULL) {
+			if (get_connection_private_key(c, type, st->st_logger) == NULL) {
 				loglog(RC_LOG_SERIOUS, "cannot find %s key", type->name);
 				 /* cannot determine my private key, so not switching */
 				return c;
@@ -3067,7 +3075,7 @@ struct connection *refine_host_connection(const struct state *st,
 
 			if (this_authby == AUTHBY_PSK) {
 				/* secret must match the one we already used */
-				const chunk_t *dpsk = get_psk(d);
+				const chunk_t *dpsk = get_psk(d, st->st_logger);
 
 				/*
 				 * We can change PSK mid-way in IKEv2 or aggressive mode.
@@ -3095,7 +3103,7 @@ struct connection *refine_host_connection(const struct state *st,
 				 * we sent previously.
 				 */
 				const struct pubkey_type *type = &pubkey_type_rsa;
-				const struct private_key_stuff *pks = get_connection_private_key(d, type);
+				const struct private_key_stuff *pks = get_connection_private_key(d, type, st->st_logger);
 				if (pks == NULL)
 					continue;	/* no key */
 
@@ -4174,40 +4182,13 @@ void liveness_clear_connection(struct connection *c, const char *v)
 	 * to remember what it was to know if we still need to unroute after delete
 	 */
 	if (c->kind == CK_INSTANCE) {
-		delete_states_by_connection(c, TRUE);
+		delete_states_by_connection(c, TRUE, null_fd/*no-whack?*/);
 	} else {
 		flush_pending_by_connection(c); /* remove any partial negotiations that are failing */
-		delete_states_by_connection(c, TRUE);
+		delete_states_by_connection(c, TRUE, null_fd/*no-whack?*/);
 		DBGF(DBG_DPD, "%s: unrouting connection %s action - clearing",
 			enum_name(&connection_kind_names, c->kind), v);
 		unroute_connection(c); /* --unroute */
-	}
-}
-
-/*
- * When replacing an old existing connection, suppress sending delete notify
- */
-void suppress_delete(struct connection *c)
-{
-	struct state *pst = state_with_serialno(c->newest_isakmp_sa);
-	struct state *cst = state_with_serialno(c->newest_ipsec_sa);
-
-	if (pst != NULL) {
-		pst->st_suppress_del_notify = TRUE;
-		dbg("Marked IKE state #%lu to suppress sending delete notify",
-		    c->newest_isakmp_sa);
-	} else {
-		libreswan_log("did not find old IKE state #%lu to mark for suppressing delete",
-			      c->newest_isakmp_sa);
-	}
-
-	if (cst != NULL) {
-		cst->st_suppress_del_notify = TRUE;
-		dbg("Marked IPSEC state #%lu to suppress sending delete notify",
-		    c->newest_ipsec_sa);
-	} else {
-		libreswan_log("did not find old IPsec state #%lu to mark for suppressing delete",
-			      c->newest_ipsec_sa);
 	}
 }
 
@@ -4238,7 +4219,7 @@ void liveness_action(struct connection *c, enum ike_version ike_version)
 			DBGF(DBG_DPD, "%s warning dpdaction=hold on instance futile - will be deleted",
 				ikev);
 		}
-		delete_states_by_connection(c, TRUE);
+		delete_states_by_connection(c, TRUE, null_fd/*no-whack?*/);
 		break;
 
 	default:

@@ -359,7 +359,7 @@ struct state {
 	/*const*/ enum sa_type st_establishing_sa;	/* where is this state going? */
 
 	bool st_ikev2_anon;                     /* is this an anonymous IKEv2 state? */
-	bool st_suppress_del_notify;            /* suppress sending DELETE - eg replaced conn */
+	bool st_dont_send_delete;		/* suppress sending DELETE - eg replaced conn */
 
 	struct connection *st_connection;       /* connection for this SA */
  	struct logger *st_logger;
@@ -837,10 +837,10 @@ extern void release_any_whack(struct state *st, where_t where, const char *why);
 extern void state_eroute_usage(const ip_subnet *ours, const ip_subnet *his,
 			       unsigned long count, monotime_t nw);
 extern void delete_state(struct state *st);
-extern void discard_state(struct state **st);
-extern void delete_states_by_connection(struct connection *c, bool relations);
+extern void delete_states_by_connection(struct connection *c, bool relations, struct fd *whackfd);
 extern void rekey_p2states_by_connection(struct connection *c);
-extern void delete_my_family(struct state *pst, bool v2_responder_state);
+enum send_delete { PROBABLY_SEND_DELETE, DONT_SEND_DELETE, };
+extern void delete_ike_family(struct ike_sa *ike, enum send_delete send_delete);
 extern void schedule_next_child_delete(struct state *st, struct ike_sa *ike);
 
 struct state *ikev1_duplicate_state(struct state *st, struct fd *whackfd);
@@ -905,7 +905,7 @@ extern void set_state_ike_endpoints(struct state *st,
 				    struct connection *c);
 
 extern void delete_cryptographic_continuation(struct state *st);
-extern void delete_states_dead_interfaces(void);
+extern void delete_states_dead_interfaces(struct fd *whackfd);
 extern bool dpd_active_locally(const struct state *st);
 
 /*
@@ -936,7 +936,7 @@ extern void append_st_cfg_dns(struct state *st, const char *dnsip);
 extern bool ikev2_viable_parent(const struct ike_sa *ike);
 
 extern bool uniqueIDs;  /* --uniqueids? */
-extern void ISAKMP_SA_established(const struct state *pst);
+extern void IKE_SA_established(const struct ike_sa *ike);
 extern void revive_conns(struct fd *whackfd);
 
 void list_state_events(const struct fd *whackfd, monotime_t now);

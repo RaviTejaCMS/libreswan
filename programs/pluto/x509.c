@@ -478,26 +478,15 @@ static void replace_public_key(struct pubkey_list **pubkey_db,
 }
 
 static struct pubkey *create_cert_pubkey(const struct id *id,
-					 CERTCertificate *cert)
+					 CERTCertificate *cert,
+					 struct logger *logger)
 {
-	enum PrivateKeyKind kind = nss_cert_key_kind(cert);
 	/*
 	 * Try to convert CERT to an internal PUBKEY object.  If
 	 * someone, in parallel, deletes the underlying cert from the
 	 * NSS DB, then this will fail.
 	 */
-	struct pubkey *pk;
-	switch (kind) {
-	case PKK_RSA:
-		pk = allocate_RSA_public_key_nss(cert);
-		break;
-	case PKK_ECDSA:
-		pk = allocate_ECDSA_public_key_nss(cert);
-		break;
-	default:
-		libreswan_log("NSS: certificate key kind %d is unknown; not creating pubkey", kind);
-		return NULL;
-	}
+	struct pubkey *pk = allocate_pubkey_nss(cert, logger);
 	if (pk == NULL) {
 		dbg("failed to allocate/extract pubkey from cert '%s'", cert->nickname);
 		return NULL;
@@ -508,17 +497,19 @@ static struct pubkey *create_cert_pubkey(const struct id *id,
 	return pk;
 }
 
-static struct pubkey *create_cert_subjectdn_pubkey(CERTCertificate *cert)
+static struct pubkey *create_cert_subjectdn_pubkey(CERTCertificate *cert,
+						   struct logger *logger)
 {
 	struct id id = {
 		.kind = ID_DER_ASN1_DN,
 		.name = same_secitem_as_chunk(cert->derSubject),
 	};
-	return create_cert_pubkey(&id, cert);
+	return create_cert_pubkey(&id, cert, logger);
 }
 
 static void add_cert_san_pubkeys(struct pubkey_list **pubkey_db,
-				 CERTCertificate *cert)
+				 CERTCertificate *cert,
+				 struct logger *logger)
 {
 	PRArenaPool *arena = PORT_NewArena(DER_DEFAULT_CHUNKSIZE);
 
@@ -530,7 +521,7 @@ static void add_cert_san_pubkeys(struct pubkey_list **pubkey_db,
 
 		gntoid(&id, gn);
 		if (id.kind != ID_NONE) {
-			struct pubkey *pk = create_cert_pubkey(&id, cert);
+			struct pubkey *pk = create_cert_pubkey(&id, cert, logger);
 			if (pk != NULL) {
 				replace_public_key(pubkey_db, pk);
 			}
@@ -550,22 +541,23 @@ static void add_cert_san_pubkeys(struct pubkey_list **pubkey_db,
  * @keyid provides an id for a secondary entry
  */
 bool add_pubkey_from_nss_cert(struct pubkey_list **pubkey_db,
-			      const struct id *keyid, CERTCertificate *cert)
+			      const struct id *keyid, CERTCertificate *cert,
+			      struct logger *logger)
 {
-	struct pubkey *pk = create_cert_subjectdn_pubkey(cert);
+	struct pubkey *pk = create_cert_subjectdn_pubkey(cert, logger);
 	if (pk == NULL) {
 		dbg("failed to create subjectdn_pubkey from cert");
 		return false;
 	}
 
 	replace_public_key(pubkey_db, pk);
-	add_cert_san_pubkeys(pubkey_db, cert);
+	add_cert_san_pubkeys(pubkey_db, cert, logger);
 
 	if (keyid != NULL && keyid->kind != ID_DER_ASN1_DN &&
 			     keyid->kind != ID_NONE &&
 			     keyid->kind != ID_FROMCERT)
 	{
-		struct pubkey *pk2 = create_cert_pubkey(keyid, cert);
+		struct pubkey *pk2 = create_cert_pubkey(keyid, cert, logger);
 		if (pk2 != NULL) {
 			replace_public_key(pubkey_db, pk2);
 		}

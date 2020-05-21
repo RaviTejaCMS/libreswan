@@ -655,7 +655,7 @@ void delete_state_by_id_name(struct state *st, void *name)
 	id_buf thatidb;
 	const char *thatidbuf = str_id(&c->spd.that.id, &thatidb);
 	if (streq(thatidbuf, name)) {
-		delete_my_family(st, FALSE);
+		delete_ike_family(pexpect_ike_sa(st), PROBABLY_SEND_DELETE);
 		/* note: no md->st to clear */
 	}
 }
@@ -667,7 +667,7 @@ void v1_delete_state_by_username(struct state *st, void *name)
 		return;
 
 	if (IS_IKE_SA(st) && streq(st->st_xauth_username, name)) {
-		delete_my_family(st, FALSE);
+		delete_ike_family(pexpect_ike_sa(st), PROBABLY_SEND_DELETE);
 		/* note: no md->st to clear */
 	}
 }
@@ -809,31 +809,43 @@ static void flush_incomplete_children(struct ike_sa *ike)
 			  flush_incomplete_child, NULL/*arg*/, __func__);
 }
 
-static bool send_delete_check(const struct state *st)
+static bool should_send_delete(const struct state *st)
 {
-	if (st->st_suppress_del_notify)
-		return FALSE;
-
-	if (IS_IPSEC_SA_ESTABLISHED(st) ||
-			IS_ISAKMP_SA_ESTABLISHED(st->st_state))
-	{
-		if ((st->st_ike_version == IKEv2) &&
-				IS_CHILD_SA(st) &&
-				state_with_serialno(st->st_clonedfrom) == NULL) {
-			/* ??? in v2, there must be a parent */
-			DBG(DBG_CONTROL, DBG_log("deleting state but IKE SA does not exist for this child SA so Informational Exchange cannot be sent"));
-
-			return FALSE;
-		}
-		return TRUE;
+	if (st->st_dont_send_delete) {
+		dbg("%s: no, just because", __func__);
+		return false;
 	}
-	return FALSE;
+
+	if (!IS_IPSEC_SA_ESTABLISHED(st) &&
+	    !IS_ISAKMP_SA_ESTABLISHED(st->st_state)) {
+		dbg("%s: no, not established", __func__);
+		return false;
+	}
+
+	if ((st->st_ike_version == IKEv2) &&
+	    IS_CHILD_SA(st) &&
+	    state_with_serialno(st->st_clonedfrom) == NULL) {
+		/*
+		 * ??? in v2, there must be a parent
+		 *
+		 * XXX: except when delete_state(ike), instead of
+		 * delete_ike_family(ike), is called ...
+		 *
+		 * Without an IKE SA sending the notify isn't
+		 * possible.
+		 */
+		dbg("%s: no, lost parent; suspect IKE SA was deleted without deleting children", __func__);
+		return false;
+	}
+
+	dbg("%s: yes", __func__);
+	return true;
 }
 
 static void delete_state_log(struct state *st, struct state *cur_state)
 {
 	struct connection *const c = st->st_connection;
-	bool del_notify = !impair.send_no_delete && send_delete_check(st);
+	bool del_notify = !impair.send_no_delete && should_send_delete(st);
 
 	if (cur_state != NULL && cur_state == st) {
 		/*
@@ -867,29 +879,15 @@ static void delete_state_log(struct state *st, struct state *cur_state)
 	    enum_name(&state_category_names, st->st_state->category));
 }
 
-void discard_state(struct state **st)
-{
-	/*
-	 * try to stop revival and messages
-	 */
-	if (IS_IKE_SA(*st)) {
-		change_state(*st, STATE_IKESA_DEL);
-	} else {
-		change_state(*st, STATE_CHILDSA_DEL);
-	}
-	delete_state(*st);
-	*st = NULL;
-}
-
 static v2_msgid_pending_cb ikev2_send_delete_continue;
 
 static stf_status ikev2_send_delete_continue(struct ike_sa *ike UNUSED,
 		struct state *st,
 		struct msg_digest *md UNUSED)
 {
-	if (send_delete_check(st)) {
+	if (should_send_delete(st)) {
 		send_delete(st);
-		st->st_suppress_del_notify = TRUE;
+		st->st_dont_send_delete = true;
 		dbg("%s Marked IPSEC state #%lu to suppress sending delete notify", __func__, st->st_serialno);
 	}
 
@@ -900,7 +898,7 @@ static stf_status ikev2_send_delete_continue(struct ike_sa *ike UNUSED,
 void schedule_next_child_delete(struct state *st, struct ike_sa *ike)
 {
 	if (st->st_ike_version == IKEv2 &&
-			send_delete_check(st)) {
+	    should_send_delete(st)) {
 		/* pre delete check for slot to send delete message */
 		struct v2_msgid_window *initiator = &ike->sa.st_v2_msgid_windows.initiator;
 		intmax_t unack = (initiator->sent - initiator->recv);
@@ -1063,7 +1061,7 @@ void delete_state(struct state *st)
 		release_any_md(&md);
 	}
 
-	if (send_delete_check(st)) {
+	if (should_send_delete(st)) {
 		/*
 		 * tell the other side of any IPSEC SAs that are going down
 		 *
@@ -1357,9 +1355,10 @@ bool v2_child_connection_probably_shared(struct child_sa *child)
  * returns true.
  */
 static void foreach_state_by_connection_func_delete(struct connection *c,
-					      bool (*comparefunc)(
-						      struct state *st,
-						      struct connection *c))
+						    bool (*comparefunc)(
+							    struct state *st,
+							    struct connection *c),
+						    struct fd *whackfd)
 {
 	/* this kludge avoids an n^2 algorithm */
 
@@ -1373,9 +1372,7 @@ static void foreach_state_by_connection_func_delete(struct connection *c,
 		dbg("FOR_EACH_STATE_... in %s", __func__);
 		struct state *this = NULL;
 		FOR_EACH_STATE_NEW2OLD(this) {
-			DBG(DBG_CONTROL,
-			    DBG_log("state #%lu",
-				this->st_serialno));
+			dbg("state #%lu", this->st_serialno);
 
 			/* on first pass, ignore established ISAKMP SA's */
 			if (pass == 0 &&
@@ -1391,6 +1388,9 @@ static void foreach_state_by_connection_func_delete(struct connection *c,
 				 * other state'.
 				 */
 				so_serial_t old_serialno = push_cur_state(this);
+				/* XXX: better way? */
+				close_any(&this->st_logger->global_whackfd);
+				this->st_logger->global_whackfd = dup_any(whackfd);
 				delete_state(this);
 				pop_cur_state(old_serialno);
 			}
@@ -1403,7 +1403,7 @@ static void foreach_state_by_connection_func_delete(struct connection *c,
  * but using interfaces that are going down
  */
 
-void delete_states_dead_interfaces(void)
+void delete_states_dead_interfaces(struct fd *whackfd)
 {
 	struct state *this = NULL;
 	dbg("FOR_EACH_STATE_... in %s", __func__);
@@ -1416,9 +1416,12 @@ void delete_states_dead_interfaces(void)
 				id_vname = c->xfrmi->name;
 			else
 				id_vname = this->st_interface->ip_dev->id_rname;
-			libreswan_log(
-				"deleting lasting state #%lu on interface (%s) which is shutting down",
-				this->st_serialno, id_vname);
+			log_global(RC_LOG, whackfd,
+				   "deleting lasting state #%lu on interface (%s) which is shutting down",
+				   this->st_serialno, id_vname);
+			/* XXX: better? */
+			close_any(&this->st_logger->global_whackfd);
+			this->st_logger->global_whackfd = dup_any(whackfd);
 			delete_state(this);
 			/* note: no md->st to clear */
 		}
@@ -1447,14 +1450,13 @@ static bool same_phase1_sa_relations(struct state *this,
 		this->st_clonedfrom == parent_sa);
 }
 
-void delete_states_by_connection(struct connection *c, bool relations)
+void delete_states_by_connection(struct connection *c, bool relations, struct fd *whackfd)
 {
 	enum connection_kind ck = c->kind;
 
-	DBG(DBG_CONTROL, DBG_log("Deleting states for connection - %s",
-		relations ? "including all other IPsec SA's of this IKE SA" :
-			"not including other IPsec SA's"
-		));
+	dbg("deleting states for connection - %s",
+	    relations ? "including all other IPsec SA's of this IKE SA" :
+	    "not including other IPsec SA's");
 
 	/*
 	 * save this connection's isakmp SA,
@@ -1464,7 +1466,8 @@ void delete_states_by_connection(struct connection *c, bool relations)
 		c->kind = CK_GOING_AWAY;
 
 	foreach_state_by_connection_func_delete(c,
-		relations ? same_phase1_sa_relations : same_phase1_sa);
+						relations ? same_phase1_sa_relations : same_phase1_sa,
+						whackfd);
 
 	const struct spd_route *sr;
 
@@ -2896,25 +2899,26 @@ void v2_migrate_children(struct ike_sa *from, struct child_sa *to)
 			  v2_migrate_predicate, &filter, __func__);
 }
 
-struct delete_filter {
-	bool v2_responder_state;
-};
-
-static bool delete_predicate(struct state *st, void *context)
+static bool delete_ike_family_child(struct state *st, void *unused_context UNUSED)
 {
-	struct delete_filter *filter = context;
-	if (filter->v2_responder_state) {
-		/*
-		 * XXX: Suspect forcing the state to ..._DEL is a
-		 * secret code for do-not send a delete notification?
-		 */
-		change_state(st, STATE_CHILDSA_DEL);
+	struct ike_sa *ike = ike_sa(st, HERE);
+	/* pass down whack fd; better abstraction? */
+	if (ike != NULL && fd_p(ike->sa.st_logger->global_whackfd)) {
+		close_any(&st->st_logger->global_whackfd);
+		st->st_logger->global_whackfd = dup_any(ike->sa.st_logger->global_whackfd);
+	}
+	switch (st->st_ike_version) {
+	case IKEv1:
+		break;
+	case IKEv2:
+		st->st_dont_send_delete = true;
+		break;
 	}
 	delete_state(st);
 	return false; /* keep going */
 }
 
-void delete_my_family(struct state *pst, bool v2_responder_state)
+void delete_ike_family(struct ike_sa *ike, enum send_delete send_delete)
 {
 	/*
 	 * We are a parent: delete our children and
@@ -2922,27 +2926,23 @@ void delete_my_family(struct state *pst, bool v2_responder_state)
 	 * Our children will be on the same hash chain
 	 * because we share IKE SPIs.
 	 */
-	passert(!IS_CHILD_SA(pst));	/* we had better be a parent */
-	struct delete_filter delete_filter = {
-		.v2_responder_state = v2_responder_state,
-	};
-	state_by_ike_spis(pst->st_ike_version,
-			  &pst->st_serialno,
+	state_by_ike_spis(ike->sa.st_ike_version,
+			  &ike->sa.st_serialno,
 			  NULL/*ignore v1 msgid*/,
 			  NULL/*ignore-sa-role*/,
-			  &pst->st_ike_spis,
-			  delete_predicate, &delete_filter,
+			  &ike->sa.st_ike_spis,
+			  delete_ike_family_child, NULL,
 			  __func__);
 	/* delete self */
-	if (v2_responder_state) {
-		/*
-		 * XXX: Suspect forcing the state to ..._DEL is a
-		 * secret code for do-not send a delete notification?
-		 */
-		change_state(pst, STATE_IKESA_DEL);
+	switch (send_delete) {
+	case DONT_SEND_DELETE:
+		ike->sa.st_dont_send_delete = true;
+		break;
+	case PROBABLY_SEND_DELETE:
+		/* let delete_state()'s vodo make the decision */
+		break;
 	}
-	delete_state(pst);
-	/* note: no md->st to clear */
+	delete_state(&ike->sa);
 }
 
 /*
@@ -3153,6 +3153,22 @@ void append_st_cfg_domain(struct state *st, char *domain)
 	}
 }
 
+static void suppress_delete_notify(const struct ike_sa *ike,
+				   const char *what, so_serial_t so)
+{
+	struct state *st = state_by_serialno(so);
+	if (st == NULL) {
+		log_state(RC_LOG, &ike->sa,
+			  "did not find old %s state #%lu to mark for suppressing delete",
+			  what, so);
+		return;
+	}
+
+	st->st_dont_send_delete = true;
+	dbg("marked %s state #%lu to suppress sending delete notify",
+	    what, st->st_serialno);
+}
+
 /*
  * an ISAKMP SA has been established.
  * Note the serial number, and release any connections with
@@ -3169,9 +3185,10 @@ void append_st_cfg_domain(struct state *st, char *domain)
  * IKEv1 code does not send or process INITIAL_CONTACT
  * IKEv2 codes does so we take it into account.
  */
-void ISAKMP_SA_established(const struct state *pst)
+
+void IKE_SA_established(const struct ike_sa *ike)
 {
-	struct connection *c = pst->st_connection;
+	struct connection *c = ike->sa.st_connection;
 	bool authnull = (LIN(POLICY_AUTH_NULL, c->policy) || c->spd.that.authby == AUTHBY_NULL);
 
 	if (c->spd.this.xauth_server && LIN(POLICY_PSK, c->policy)) {
@@ -3179,9 +3196,9 @@ void ISAKMP_SA_established(const struct state *pst)
 		 * If we are a server and use PSK, all clients use the same group ID
 		 * Note that "xauth_server" also refers to IKEv2 CP
 		 */
-		DBG(DBG_CONTROL, DBG_log("We are a server using PSK and clients are using a group ID"));
+		dbg("We are a server using PSK and clients are using a group ID");
 	} else if (!uniqueIDs) {
-		DBG(DBG_CONTROL, DBG_log("uniqueIDs disabled, not contemplating releasing older self"));
+		dbg("uniqueIDs disabled, not contemplating releasing older self");
 	} else {
 		/*
 		 * for all existing connections: if the same Phase 1 IDs are used,
@@ -3202,13 +3219,29 @@ void ISAKMP_SA_established(const struct state *pst)
 				bool same_remote_ip = sameaddr(&c->spd.that.host_addr, &d->spd.that.host_addr);
 
 				if (same_remote_ip && (!old_is_nullauth && authnull)) {
-					libreswan_log("cannot replace old authenticated connection with authnull connection");
+					log_state(RC_LOG, &ike->sa, "cannot replace old authenticated connection with authnull connection");
 				} else if (!same_remote_ip && old_is_nullauth && authnull) {
-						libreswan_log("NULL auth ID for different IP's cannot replace each other");
+					log_state(RC_LOG, &ike->sa, "NULL auth ID for different IP's cannot replace each other");
 				} else {
-					DBG(DBG_CONTROL, DBG_log("Unorienting old connection with same IDs"));
-					suppress_delete(d); /* don't send a delete */
-					release_connection(d, FALSE); /* this deletes the states */
+					dbg("unorienting old connection with same IDs");
+					/*
+					 * When replacing an old
+					 * existing connection,
+					 * suppress sending delete
+					 * notify
+					 */
+					suppress_delete_notify(ike, "ISAKMP", d->newest_isakmp_sa);
+					suppress_delete_notify(ike, "IKE", d->newest_ipsec_sa);
+					/*
+					 * XXX: assume this call
+					 * doesn't want to log to
+					 * whack(?).  While PST still
+					 * has an attached whack, the
+					 * global whack that this call
+					 * would have used detached
+					 * long ago.
+					 */
+					release_connection(d, false, null_fd); /* this deletes the states */
 				}
 			}
 			d = next;
@@ -3224,14 +3257,14 @@ void ISAKMP_SA_established(const struct state *pst)
 		 * of QuickMode is installed, so the remote endpoints view
 		 * this IKE SA still as the active one?
 		 */
-		if (pst->st_seen_initialc) {
+		if (ike->sa.st_seen_initialc) {
 			if (c->newest_isakmp_sa != SOS_NOBODY &&
-			    c->newest_isakmp_sa != pst->st_serialno) {
+			    c->newest_isakmp_sa != ike->sa.st_serialno) {
 				struct state *old_p1 = state_by_serialno(c->newest_isakmp_sa);
 
-				DBG(DBG_CONTROL, DBG_log("deleting replaced IKE state for %s",
-					old_p1->st_connection->name));
-				old_p1->st_suppress_del_notify = TRUE;
+				dbg("deleting replaced IKE state for %s",
+				    old_p1->st_connection->name);
+				old_p1->st_dont_send_delete = true;
 				event_force(EVENT_SA_EXPIRE, old_p1);
 			}
 
@@ -3242,14 +3275,14 @@ void ISAKMP_SA_established(const struct state *pst)
 				if (c == d && same_id(&c->spd.that.id, &d->spd.that.id)) {
 					DBG(DBG_CONTROL, DBG_log("Initial Contact received, deleting old state #%lu from connection '%s'",
 						c->newest_ipsec_sa, c->name));
-					old_p2->st_suppress_del_notify = TRUE;
+					old_p2->st_dont_send_delete = true;
 					event_force(EVENT_SA_EXPIRE, old_p2);
 				}
 			}
 		}
 	}
 
-	c->newest_isakmp_sa = pst->st_serialno;
+	c->newest_isakmp_sa = ike->sa.st_serialno;
 }
 
 static void whack_log_state_event(const struct fd *whackfd, struct state *st,
