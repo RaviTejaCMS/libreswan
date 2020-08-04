@@ -127,24 +127,16 @@ pb_stream open_v2_message(pb_stream *reply,
 	 * to flip MD's I bit, but since this is IKEv++, there may not
 	 * even be an I bit.
 	 */
-	if (ike != NULL) {
-		/* easy */
-		switch (ike->sa.st_sa_role) {
-		case SA_INITIATOR:
-			hdr.isa_flags |= ISAKMP_FLAGS_v2_IKE_I;
-			break;
-		case SA_RESPONDER:
-			break;
-		default:
-			bad_case(ike->sa.st_sa_role);
-		}
+	enum sa_role sa_role = (ike != NULL ? ike->sa.st_sa_role : SA_RESPONDER);
+	if (sa_role == SA_INITIATOR) {
+		hdr.isa_flags |= ISAKMP_FLAGS_v2_IKE_I;
 	}
 
 	/*
 	 * R (Response) flag
 	 *
-	 * If there's no MD, then this must be a new request -
-	 * R(Responder) flag clear.
+	 * If there's no MD, then this must be a new exchange request
+	 * - R(Responder) flag clear.
 	 *
 	 * If there is an MD, then this must be a response -
 	 * R(Responder) flag set.
@@ -155,7 +147,8 @@ pb_stream open_v2_message(pb_stream *reply,
 	 * Informational Messages outside of an IKE SA - where the
 	 * response is forced.
 	 */
-	if (md != NULL) {
+	enum message_role message_role = (md != NULL ? MESSAGE_RESPONSE : MESSAGE_REQUEST);
+	if (message_role == MESSAGE_RESPONSE) {
 		hdr.isa_flags |= ISAKMP_FLAGS_v2_MSG_R;
 	}
 
@@ -213,7 +206,16 @@ pb_stream open_v2_message(pb_stream *reply,
 		}
 	}
 
-	return open_output_struct_pbs(reply, &hdr, &isakmp_hdr_desc);
+	struct pbs_out rbody;
+	if (!pbs_out_struct(reply, &hdr, sizeof(hdr), &isakmp_hdr_desc, &rbody)) {
+		return empty_pbs;
+	}
+	if (impair.add_unknown_v2_payload_to == exchange_type &&
+	    !emit_v2UNKNOWN("request", exchange_type, &rbody)) {
+		return empty_pbs;
+	}
+
+	return rbody;
 }
 
 /*
@@ -298,9 +300,8 @@ bool close_v2SK_payload(v2SK_payload_t *sk)
 	} else {
 		padding = 1;
 	}
-	DBG(DBG_EMITTING,
-	    DBG_log("adding %zd bytes of padding (including 1 byte padding-length)",
-		    padding));
+	dbg("adding %zd bytes of padding (including 1 byte padding-length)",
+	    padding);
 	for (unsigned i = 0; i < padding; i++) {
 		if (!out_repeated_byte(i, 1, &sk->pbs, "padding and length")) {
 			libreswan_log("error initializing padding for encrypted %s payload",
@@ -615,7 +616,7 @@ static bool ikev2_verify_and_decrypt_sk_payload(struct ike_sa *ike,
 			return false;
 		}
 
-		DBG(DBG_PARSING, DBG_log("authenticator matched"));
+		dbg("authenticator matched");
 
 		/* decrypt */
 
@@ -795,11 +796,10 @@ bool ikev2_decrypt_msg(struct state *st, struct msg_digest *md)
 		md->chain[ISAKMP_NEXT_v2SK]->pbs = same_chunk_as_in_pbs(c, "decrypted SK payload");
 	}
 
-	DBG(DBG_CONTROLMORE,
-	    DBG_log("#%lu ikev2 %s decrypt %s",
-		    st->st_serialno,
-		    enum_name(&ikev2_exchange_names, md->hdr.isa_xchg),
-		    ok ? "success" : "failed"));
+	dbg("#%lu ikev2 %s decrypt %s",
+	    st->st_serialno,
+	    enum_name(&ikev2_exchange_names, md->hdr.isa_xchg),
+	    ok ? "success" : "failed");
 
 	return ok;
 }
@@ -838,12 +838,11 @@ static bool record_outbound_fragment(struct logger *logger,
 				     unsigned int number, unsigned int total,
 				     const char *desc)
 {
-	pb_stream frag_stream;
-	unsigned char frag_buffer[PMAX(MIN_MAX_UDP_DATA_v4, MIN_MAX_UDP_DATA_v6)];
-
 	/* make sure HDR is at start of a clean buffer */
-	init_out_pbs(&frag_stream, frag_buffer, sizeof(frag_buffer),
-		     "reply frag packet");
+	unsigned char frag_buffer[PMAX(MIN_MAX_UDP_DATA_v4, MIN_MAX_UDP_DATA_v6)];
+	struct pbs_out frag_stream = open_pbs_out("reply frag packet",
+						  frag_buffer, sizeof(frag_buffer),
+						  logger);
 
 	/* HDR out */
 
@@ -946,7 +945,12 @@ static bool record_outbound_fragments(const pb_stream *rbody,
 
 	unsigned int len = endpoint_type(&sk->ike->sa.st_remote_endpoint)->ikev2_max_fragment_size;
 
-	if (sk->ike->sa.st_interface != NULL && sk->ike->sa.st_interface->ike_float)
+	/*
+	 * If we are doing NAT, so that the other end doesn't mistake
+	 * this message for ESP, each message needs a non-ESP_Marker
+	 * prefix.
+	 */
+	if (sk->ike->sa.st_interface != NULL && sk->ike->sa.st_interface->esp_encapsulation_enabled)
 		len -= NON_ESP_MARKER_SIZE;
 
 	len -= NSIZEOF_isakmp_hdr + NSIZEOF_ikev2_skf;
@@ -1041,14 +1045,20 @@ stf_status record_v2SK_message(pb_stream *msg,
 			       enum message_role message)
 {
 	size_t len = pbs_offset(msg);
+
+	/*
+	 * If we are doing NAT, so that the other end doesn't mistake
+	 * this message for ESP, each message needs a non-ESP_Marker
+	 * prefix.
+	 */
 	if (!pexpect(sk->ike->sa.st_interface != NULL) &&
-	    sk->ike->sa.st_interface->ike_float)
+	    sk->ike->sa.st_interface->esp_encapsulation_enabled)
 		len += NON_ESP_MARKER_SIZE;
 
 	/* IPv4 and IPv6 have different fragment sizes */
 	if (sk->ike->sa.st_interface->protocol == &ip_protocol_udp &&
 	    LIN(POLICY_IKE_FRAG_ALLOW, sk->ike->sa.st_connection->policy) &&
-	    sk->ike->sa.st_seen_fragvid &&
+	    sk->ike->sa.st_seen_fragmentation_supported &&
 	    len >= endpoint_type(&sk->ike->sa.st_remote_endpoint)->ikev2_max_fragment_size) {
 		struct v2_outgoing_fragment **frags = &sk->ike->sa.st_v2_outgoing[message];
 		if (!record_outbound_fragments(msg, sk, what, frags)) {
@@ -1067,11 +1077,17 @@ stf_status record_v2SK_message(pb_stream *msg,
 	return STF_OK;
 }
 
-struct ikev2_id build_v2_id_payload(const struct end *end, shunk_t *body)
+struct ikev2_id build_v2_id_payload(const struct end *end, shunk_t *body,
+				    const char *what, struct logger *logger)
 {
 	struct ikev2_id id_header = {
 		.isai_type = id_to_payload(&end->id, &end->host_addr, body),
 		.isai_critical = build_ikev2_critical(false),
 	};
+	if (impair.send_nonzero_reserved_id) {
+		log_message(RC_LOG, logger, "IMPAIR: setting reserved byte 3 of %s to 0x%02x",
+			    what, ISAKMP_PAYLOAD_LIBRESWAN_BOGUS);
+		id_header.isai_res3 = ISAKMP_PAYLOAD_LIBRESWAN_BOGUS;
+	}
 	return id_header;
 }

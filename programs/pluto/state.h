@@ -261,13 +261,13 @@ struct msg_digest *unsuspend_md(struct state *st);
 /*
  * All the hash tables states are stored in.
  */
-enum state_hash {
-	SERIALNO_STATE_HASH,
-	CONNECTION_STATE_HASH,
-	REQID_STATE_HASH,
-	IKE_SPIS_STATE_HASH,
-	IKE_INITIATOR_SPI_STATE_HASH,
-	STATE_HASH_ROOF,
+enum state_hash_tables {
+	STATE_SERIALNO_HASH_TABLE,
+	STATE_CONNECTION_HASH_TABLE,
+	STATE_REQID_HASH_TABLE,
+	STATE_IKE_SPIS_HASH_TABLE,
+	STATE_IKE_INITIATOR_SPI_HASH_TABLE,
+	STATE_HASH_TABLES_ROOF,
 };
 
 /*
@@ -374,7 +374,7 @@ struct state {
 	ipsec_spi_t st_tunnel_in_spi;		/* KLUDGE */
 	ipsec_spi_t st_tunnel_out_spi;		/* KLUDGE */
 	IPsecSAref_t st_ref;                    /* our kernel name for our incoming SA */
-	IPsecSAref_t st_refhim;                 /* our kernel name for our outgoing SA */
+	IPsecSAref_t st_ref_peer;                 /* our kernel name for our outgoing SA */
 	reqid_t st_reqid;			/* bundle of 4 (out,in, compout,compin */
 
 	bool st_outbound_done;			/* if true, then outgoing SA already installed */
@@ -455,7 +455,7 @@ struct state {
 	struct ikev2_proposal *st_accepted_ike_proposal;
 	struct ikev2_proposal *st_accepted_esp_or_ah_proposal;
 
-	enum sa_role st_sa_role;			/* who initiated the SA */ 
+	enum sa_role st_sa_role;			/* who initiated the SA */
 
 	struct v2_msgid_wip st_v2_msgid_wip;		/* IKE and CHILD */
 	struct v2_msgid_windows st_v2_msgid_windows;	/* IKE */
@@ -468,12 +468,12 @@ struct state {
 	msgid_t st_msgid_lastreplied;         /* to decide retransmit CREATE_CHILD_SA */
 
 	chunk_t st_firstpacket_me;              /* copy of my message 1 (for hashing) */
-	chunk_t st_firstpacket_him;             /* copy of his message 1 (for hashing) */
+	chunk_t st_firstpacket_peer;             /* copy of peers message 1 (for hashing) */
 
 	struct p_dns_req *ipseckey_dnsr;    /* ipseckey of that end */
 	struct p_dns_req *ipseckey_fwd_dnsr;/* validate IDi that IP in forward A/AAAA */
 
-	char *st_active_redirect_gw;	/* needed for sending of REDIRECT in informational */
+	shunk_t st_active_redirect_gw;	/* needed for sending of REDIRECT in informational */
 
 	/** end of IKEv2-only things **/
 
@@ -509,7 +509,7 @@ struct state {
 	uint8_t st_myuserprotoid;             /* IDcx.protoid */
 	uint16_t st_myuserport;
 
-	/* his stuff */
+	/* peers stuff */
 
 	/* Phase 2 ID payload info about peer's user */
 	uint8_t st_peeruserprotoid;           /* IDcx.protoid */
@@ -555,7 +555,7 @@ struct state {
 	 *
 	 * In IKEv1, both the the DH exchange and authentication can
 	 * be combined into a single packet.  Consequently, processing
-	 * consits of: first DH is used to derive the shared secret
+	 * consists of: first DH is used to derive the shared secret
 	 * from DH_SECRET and the keying material; and then
 	 * authentication is performed.  However, should
 	 * authentication fail, everything thing derived from that
@@ -600,7 +600,7 @@ struct state {
 	 * from enum state_kind this is far more robust.
 	 *
 	 * DELETE_REASON, if the SA establishes it contains
-	 * REASON_COMPLETED, else it is explictly set to failure
+	 * REASON_COMPLETED, else it is explicitly set to failure
 	 * indication (or defaults to REASON_UNKNOWN).  Note that the
 	 * information can't be reliably extracted from enum
 	 * state_kind in delete_state() because, by that point, state
@@ -725,7 +725,7 @@ struct state {
 	struct list_entry st_serialno_list_entry;
 
 	/* all the hash table entries */
-	struct list_entry st_hash_entries[STATE_HASH_ROOF];
+	struct list_entry st_hash_table_entries[STATE_HASH_TABLES_ROOF];
 
 	struct hidden_variables hidden_variables;
 
@@ -751,7 +751,7 @@ struct state {
 	bool st_seen_nortel_vid;                /* To work around a nortel bug */
 	struct isakmp_quirks quirks;            /* work arounds for faults in other products */
 	bool st_xauth_soft;                     /* XAUTH failed but policy is to soft fail */
-	bool st_seen_fragvid;                   /* should really use st_seen_vendorid, but no one else is */
+	bool st_seen_fragmentation_supported;	/* v1 frag vid; v2 frag notify */
 	bool st_seen_hashnotify;		/* did we receive hash algo notification in IKE_INIT, then send in response as well */
 	bool st_seen_fragments;                 /* did we receive ike fragments from peer, if so use them in return as well */
 	bool st_seen_no_tfc;			/* did we receive ESP_TFC_PADDING_NOT_SUPPORTED */
@@ -800,11 +800,8 @@ struct child_sa *pexpect_child_sa(struct state *st);
 
 /* global variables */
 
-extern uint16_t pluto_port;		/* Pluto's port */
-extern uint16_t pluto_nat_port;	/* Pluto's NATT floating port */
 extern uint16_t pluto_nflog_group;	/* NFLOG group - 0 means no logging  */
 extern uint16_t pluto_xfrmlifetime;	/* only used to display in status */
-extern u_int16_t pluto_tcpport;
 
 extern bool states_use_connection(const struct connection *c);
 
@@ -834,7 +831,7 @@ extern void init_states(void);
 extern void rehash_state(struct state *st,
 			 const ike_spi_t *ike_responder_spi);
 extern void release_any_whack(struct state *st, where_t where, const char *why);
-extern void state_eroute_usage(const ip_subnet *ours, const ip_subnet *his,
+extern void state_eroute_usage(const ip_subnet *ours, const ip_subnet *peers,
 			       unsigned long count, monotime_t nw);
 extern void delete_state(struct state *st);
 extern void delete_states_by_connection(struct connection *c, bool relations, struct fd *whackfd);
@@ -868,10 +865,6 @@ struct child_sa *find_v2_child_sa_by_outbound_spi(struct ike_sa *ike,
 						  uint8_t protoid,
 						  ipsec_spi_t outbound_spi);
 
-extern void find_states_and_redirect(const char *conn_name,
-				     ip_address remote_ip,
-				     char *redirect_gw);
-
 extern struct state *find_v1_info_state(const ike_spis_t *ike_spis,
 					msgid_t msgid);
 
@@ -890,7 +883,7 @@ void for_each_state(void (*f)(struct state *, void *data), void *data,
 		    const char *func);
 
 extern void find_my_cpi_gap(cpi_t *latest_cpi, cpi_t *first_busy_cpi);
-extern ipsec_spi_t uniquify_his_cpi(ipsec_spi_t cpi, const struct state *st, int tries);
+extern ipsec_spi_t uniquify_peer_cpi(ipsec_spi_t cpi, const struct state *st, int tries);
 
 extern void fmt_state(struct state *st, const monotime_t n,
 		      char *state_buf, const size_t state_buf_len,
@@ -900,9 +893,6 @@ extern void delete_states_by_peer(const struct fd *whackfd, const ip_address *pe
 extern void replace_states_by_peer(const ip_address *peer);
 extern void v1_delete_state_by_username(struct state *st, void *name);
 extern void delete_state_by_id_name(struct state *st, void *name);
-
-extern void set_state_ike_endpoints(struct state *st,
-				    struct connection *c);
 
 extern void delete_cryptographic_continuation(struct state *st);
 extern void delete_states_dead_interfaces(struct fd *whackfd);

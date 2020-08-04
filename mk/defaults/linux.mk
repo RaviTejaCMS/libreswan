@@ -1,4 +1,4 @@
-USE_NETKEY = true
+USE_XFRM = true
 
 USERLAND_CFLAGS += -DTimeZoneOffset=timezone
 
@@ -40,8 +40,3 @@ ifeq ($(LINUX_VARIANT),fedora)
   endif
 endif
 #(info USE_GLIBC_KERN_FLIP_HEADERS=$(USE_GLIBC_KERN_FLIP_HEADERS))
-
-ifndef NSS_CFLAGS
-  NSS_CFLAGS := $(shell pkg-config --cflags nss)
-  export NSS_CFLAGS
-endif

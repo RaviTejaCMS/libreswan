@@ -55,7 +55,6 @@ extern ikev2_state_transition_fn ikev2_child_inR;
 extern ikev2_state_transition_fn ikev2_child_inIoutR;
 
 extern ikev2_state_transition_fn ikev2_parent_inI1outR1;
-extern ikev2_state_transition_fn ikev2_IKE_SA_process_SA_INIT_response_notification;
 extern ikev2_state_transition_fn ikev2_auth_initiator_process_failure_notification;
 extern ikev2_state_transition_fn ikev2_auth_initiator_process_unknown_notification;
 extern ikev2_state_transition_fn ikev2_ike_sa_process_auth_request_no_skeyid;
@@ -113,16 +112,19 @@ void free_ikev2_proposals(struct ikev2_proposals **proposals);
  * XXX: Should the CREATE CHILD SA proposals be stored in the state?
  */
 
-struct ikev2_proposals *get_v2_ike_proposals(struct connection *c, const char *why);
-struct ikev2_proposals *get_v2_ike_auth_child_proposals(struct connection *c, const char *why);
+struct ikev2_proposals *get_v2_ike_proposals(struct connection *c, const char *why,
+					     struct logger *logger);
+struct ikev2_proposals *get_v2_ike_auth_child_proposals(struct connection *c, const char *why,
+							struct logger *logger);
 struct ikev2_proposals *get_v2_create_child_proposals(struct connection *c, const char *why,
-						      const struct dh_desc *default_dh);
+						      const struct dh_desc *default_dh,
+						      struct logger *logger);
 
-bool ikev2_emit_sa_proposal(pb_stream *pbs,
+bool ikev2_emit_sa_proposal(struct pbs_out *pbs,
 			    const struct ikev2_proposal *proposal,
 			    const chunk_t *local_spi);
 
-bool ikev2_emit_sa_proposals(pb_stream *outs,
+bool ikev2_emit_sa_proposals(struct pbs_out *outs,
 			     const struct ikev2_proposals *proposals,
 			     const chunk_t *local_spi);
 
@@ -138,7 +140,8 @@ stf_status ikev2_process_sa_payload(const char *what,
 				    bool expect_accepted,
 				    bool opportunistic,
 				    struct ikev2_proposal **chosen,
-				    const struct ikev2_proposals *local_proposals);
+				    const struct ikev2_proposals *local_proposals,
+				    struct logger *logger);
 
 bool ikev2_proposal_to_proto_info(const struct ikev2_proposal *proposal,
 				  struct ipsec_proto_info *proto_info);
@@ -223,17 +226,19 @@ struct state_v2_microcode {
 	const enum state_kind state;
 	const enum state_kind next_state;
 	const enum isakmp_xchg_types recv_type;
+	enum message_role recv_role;
 	const lset_t flags;
+
 	/*
 	 * During a successful state transition is an out going
 	 * message expected and, if so, is it a request or response.
 	 *
 	 * Old code had a simple flag (SMF2_SEND) and then tried to
-	 * reverse engineer this value from the incomming message.
+	 * reverse engineer this value from the incoming message.
 	 * While in theory possible, it didn't seem to go well.  For
 	 * instance, because the code didn't clearly differentiate
 	 * between a FAKE_MD (created because old code insisted on
-	 * there always being an incomming message) and a real request
+	 * there always being an incoming message) and a real request
 	 * or response it ended up trying to use STATE_KIND to figure
 	 * things out.  While perhaps it is possible to make all this
 	 * work, spelling it out seems clearer.

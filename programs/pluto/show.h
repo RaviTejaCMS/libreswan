@@ -28,7 +28,7 @@ void free_show(struct show **s);
 struct fd *show_fd(struct show *s);
 
 /*
- * Flag that the next line needs to be preceeded by a separator (aka
+ * Flag that the next line needs to be preceded by a separator (aka
  * blank line).  For instance:
  *
  *    struct show *s = new_show(whackfd);
@@ -56,5 +56,6 @@ void show_separator(struct show *s);
  */
 
 void show_comment(struct show *s, const char *message, ...) PRINTF_LIKE(2);
+void show_jambuf(struct show *s, jambuf_t *jambuf);
 
 #endif

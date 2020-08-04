@@ -20,6 +20,18 @@
 #include "ip_protoport.h"
 
 #include "constants.h"		/* for zero() */
+#include "chunk.h"		/* for clone_bytes_as_string() */
+
+const ip_protoport unset_protoport;
+
+ip_protoport protoport2(unsigned ipproto, ip_port port)
+{
+	ip_protoport protoport = {
+		.protocol = ipproto,
+		.port = hport(port),
+	};
+	return protoport;
+}
 
 err_t ttoipproto(const char *proto_name, unsigned *proto)
 {
@@ -81,7 +93,6 @@ err_t ttoprotoport(const char *src, ip_protoport *protoport)
 {
 	err_t err;
 	zero(protoport);
-	char proto_name[16];
 
 	/* get the length of the string */
 	size_t src_len = strlen(src);
@@ -98,20 +109,21 @@ err_t ttoprotoport(const char *src, ip_protoport *protoport)
 		service_name = src + src_len;
 	}
 
-	/* copy protocol name */
-	memset(proto_name, '\0', sizeof(proto_name));
-	memcpy(proto_name, src, proto_len);
-
 	/* extract protocol by trying to resolve it by name */
 	unsigned protocol;
-	err = ttoipproto(proto_name, &protocol);
-	if (err != NULL) {
-		return err;
+	{
+		char *proto_name = clone_bytes_as_string(src, proto_len, "proto name"); /* must free */
+		err = ttoipproto(proto_name, &protocol);
+		pfree(proto_name);
+		if (err != NULL) {
+			return err;
+		}
 	}
 
 	/* is there a port wildcard? */
 	unsigned port;
-	if (streq(service_name, "%any")) {
+	bool any_port = streq(service_name, "%any");
+	if (any_port) {
 		port = 0;
 	} else if (service_name[0] == '\0') {
 		/* allow N/ and N */
@@ -128,6 +140,7 @@ err_t ttoprotoport(const char *src, ip_protoport *protoport)
 	}
 
 	protoport->protocol = protocol;
+	protoport->any_port = any_port;
 	protoport->port = port;
 	return NULL;
 }
@@ -141,7 +154,7 @@ size_t jam_protoport(jambuf_t *buf, const ip_protoport *protoport)
 		s += jam(buf, "%u", protoport->protocol);
 	}
 	jam(buf, "/");
-	if (protoport->port == 0) { /* XXX:->any_port?*/
+	if (protoport->any_port) { /* XXX:->any_port?*/
 		s += jam_string(buf, "%any");
 	} else {
 		s += jam(buf, "%u", protoport->port);
@@ -163,5 +176,5 @@ bool protoport_is_set(const ip_protoport *protoport)
 
 bool protoport_has_any_port(const ip_protoport *protoport)
 {
-	return protoport->protocol != 0 && protoport->port == 0;
+	return protoport->protocol != 0 && protoport->any_port;
 }

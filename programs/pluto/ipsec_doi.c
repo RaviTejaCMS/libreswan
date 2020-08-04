@@ -36,8 +36,6 @@
 #include <arpa/inet.h>
 #include <resolv.h>
 
-#include "libreswan/pfkeyv2.h"
-
 #include "sysdep.h"
 #include "constants.h"
 #include "defs.h"
@@ -421,20 +419,23 @@ bool extract_peer_id(enum ike_id_type kind, struct id *peer, const pb_stream *id
 
 	case ID_KEY_ID:
 		peer->name = chunk2(id_pbs->cur, left);
-		DBG(DBG_PARSING,
-		    DBG_dump_hunk("KEY ID:", peer->name));
+		if (DBGP(DBG_BASE)) {
+			DBG_dump_hunk("KEY ID:", peer->name);
+		}
 		break;
 
 	case ID_DER_ASN1_DN:
 		peer->name = chunk2(id_pbs->cur, left);
-		DBG(DBG_PARSING,
-		    DBG_dump_hunk("DER ASN1 DN:", peer->name));
+		if (DBGP(DBG_BASE)) {
+		    DBG_dump_hunk("DER ASN1 DN:", peer->name);
+		}
 		break;
 
 	case ID_NULL:
 		if (left != 0) {
-			DBG(DBG_PARSING,
-				DBG_dump("unauthenticated NULL ID:", id_pbs->cur, left));
+			if (DBGP(DBG_BASE)) {
+				DBG_dump("unauthenticated NULL ID:", id_pbs->cur, left);
+			}
 		}
 		break;
 
@@ -455,7 +456,15 @@ void initialize_new_state(struct state *st,
 			  int try)
 {
 	update_state_connection(st, c);
-	set_state_ike_endpoints(st, c);
+
+	/* reset our choice of interface */
+	c->interface = NULL;
+	(void)orient(c);
+	st->st_interface = c->interface;
+	passert(st->st_interface != NULL);
+	st->st_remote_endpoint = endpoint3(c->interface->protocol,
+					   &c->spd.that.host_addr,
+					   ip_hport(c->spd.that.host_port));
 
 	st->st_policy = policy & ~POLICY_IPSEC_MASK;        /* clear bits */
 	st->st_try = try;

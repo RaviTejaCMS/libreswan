@@ -49,7 +49,7 @@ west #
 000 "west":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
 000 "west":   our idtype: ID_FQDN; our id=@west; their idtype: ID_FQDN; their id=@east
 000 "west":   dpd: action:hold; delay:0; timeout:0; nat-t: encaps:auto; nat_keepalive:yes; ikev1_natt:both
-000 "west":   newest ISAKMP SA: #0; newest IPsec SA: #0;
+000 "west":   newest ISAKMP SA: #0; newest IPsec SA: #0; conn serial: $1;
 west #
  ipsec auto --up west
 1v2 "west" #1: initiating IKEv2 IKE SA
@@ -59,6 +59,8 @@ west #
 003 "west" #1: authenticated using authby=secret
 002 "west" #2: negotiated connection [192.1.2.45-192.1.2.45:0-65535 0] -> [192.1.2.23-192.1.2.23:0-65535 0]
 004 "west" #2: STATE_V2_ESTABLISHED_CHILD_SA: IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_GCM_16_256-NONE NATOA=none NATD=none DPD=passive}
+west #
+ # ../../pluto/bin/ping-once.sh ...?
 west #
  taskset 0x3 ping -w 3 -n -c 2 192.1.2.23
 PING 192.1.2.23 (192.1.2.23) 56(84) bytes of data.

@@ -21,9 +21,8 @@
 
 #include <sys/types.h>
 #include <stdlib.h>
-#include <libreswan/pfkeyv2.h>
-#include "passert.h"
 
+#include "passert.h"
 #include "sysdep.h"
 #include "constants.h"
 #include "defs.h"
@@ -148,8 +147,7 @@ static struct db_context *kernel_alg_db_new(struct child_proposals proposals,
 		protoid = PROTO_IPSEC_AH;
 	}
 
-	DBG(DBG_EMITTING, DBG_log("kernel_alg_db_new() initial trans_cnt=%d",
-				  trans_cnt));
+	dbg("%s() initial trans_cnt=%d", __func__, trans_cnt);
 
 	/*	pass aprox. number of transforms and attributes */
 	struct db_context *ctx_new = db_prop_new(protoid, trans_cnt, trans_cnt * 2);
@@ -165,7 +163,7 @@ static struct db_context *kernel_alg_db_new(struct child_proposals proposals,
 	bool success = TRUE;
 	if (proposals.p != NULL) {
 		FOR_EACH_PROPOSAL(proposals.p, proposal) {
-			LSWDBGP(DBG_CONTROL | DBG_EMITTING, buf) {
+			LSWDBGP(DBG_BASE, buf) {
 				lswlogs(buf, "adding proposal: ");
 				fmt_proposal(buf, proposal);
 			}
@@ -184,23 +182,19 @@ static struct db_context *kernel_alg_db_new(struct child_proposals proposals,
 
 	struct db_prop  *prop = db_prop_get(ctx_new);
 
-	DBG(DBG_CONTROL | DBG_EMITTING,
-		DBG_log("kernel_alg_db_new() will return p_new->protoid=%d, p_new->trans_cnt=%d",
-			prop->protoid,
-			prop->trans_cnt));
+	dbg("%s() will return p_new->protoid=%d, p_new->trans_cnt=%d",
+	    __func__, prop->protoid, prop->trans_cnt);
 
 	unsigned int tn = 0;
 	struct db_trans *t;
 	for (t = prop->trans, tn = 0;
 	     t != NULL && t[tn].transid != 0 && tn < prop->trans_cnt;
 	     tn++) {
-		DBG(DBG_CONTROL | DBG_EMITTING,
-		    DBG_log("kernel_alg_db_new()     trans[%d]: transid=%d, attr_cnt=%d, attrs[0].type=%d, attrs[0].val=%d",
-			    tn,
-			    t[tn].transid, t[tn].attr_cnt,
-			    t[tn].attrs ? t[tn].attrs[0].type.ipsec : 255,
-			    t[tn].attrs ? t[tn].attrs[0].val : 255
-			    ));
+		dbg("%s()     trans[%d]: transid=%d, attr_cnt=%d, attrs[0].type=%d, attrs[0].val=%d",
+		    __func__, tn,
+		    t[tn].transid, t[tn].attr_cnt,
+		    t[tn].attrs ? t[tn].attrs[0].type.ipsec : 255,
+		    t[tn].attrs ? t[tn].attrs[0].val : 255);
 	}
 	prop->trans_cnt = tn;
 
@@ -264,7 +258,7 @@ void show_kernel_alg_connection(struct show *s,
 
 	if (c->policy & POLICY_PFS) {
 		/*
-		 * Get the DH algorthm specified for the child (ESP or AH).
+		 * Get the DH algorithm specified for the child (ESP or AH).
 		 *
 		 * If this is NULL and PFS is required then callers fall back to using
 		 * the parent's DH algorithm.
@@ -377,7 +371,6 @@ struct db_sa *kernel_alg_makedb(lset_t policy,
 
 	db_destroy(dbnew);
 
-	DBG(DBG_CONTROL,
-	    DBG_log("returning new proposal from esp_info"));
+	dbg("returning new proposal from esp_info");
 	return n;
 }

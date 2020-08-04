@@ -23,6 +23,7 @@
 #include "shunk.h"
 #include "chunk.h"
 #include "err.h"
+#include "where.h"
 
 struct lswlog;
 struct ip_info;
@@ -51,7 +52,7 @@ typedef struct {
 	 * We need something that makes static IPv4 initializers possible
 	 * (struct in_addr requires htonl() which is run-time only).
 	 */
-	uint8_t bytes[16];
+	struct ip_bytes { uint8_t byte[16]; } bytes;
 #ifndef ENDPOINT_TYPE
 	/*
 	 * XXX: An address abstraction - type+bytes - should not
@@ -61,17 +62,41 @@ typedef struct {
 	 * In pluto, port "0" is reserved and indicates all ports (but
 	 * does it also denote no port?).  Hopefully it is only paired
 	 * with the zero (any) address.
-	 *
-	 * XXX: Would separate and incompatible ip_hport and ip_nport
-	 * types help stop host <-> network port conversion screwups?
-	 * For instance, using ntohs() when using htons() is needed -
-	 * while wrong they have the same effect.
-	 *
 	 */
 	uint16_t hport;
 	unsigned ipproto;
+	bool is_address;
+	bool is_endpoint;
 #endif
 } ip_address;
+
+#define PRI_ADDRESS "%s version=%d hport=%u ipproto=%u is_address=%s is_endpoint=%s"
+#define pri_address(A, B)						\
+		str_address(A, B),					\
+		(A)->version,						\
+		(A)->hport,						\
+		(A)->ipproto,						\
+		bool_str((A)->is_address),				\
+		bool_str((A)->is_endpoint)
+
+#define paddress(A)							\
+	{								\
+		if ((A) != NULL && (A)->version != 0) {			\
+			/* i.e., is-set */				\
+			if ((A)->is_address == false ||			\
+			    (A)->is_endpoint == true ||			\
+			    (A)->hport != 0 ||				\
+			    (A)->ipproto != 0) {			\
+				address_buf b_;				\
+				where_t here_ = HERE;			\
+				dbg("EXPECTATION FAILED: %s is not an address; "PRI_ADDRESS" "PRI_WHERE, \
+				    #A, pri_address(A, &b_),		\
+				    pri_where(here_));			\
+			}						\
+		}							\
+	}
+
+ip_address strip_endpoint(const ip_address *address, where_t where);
 
 /*
  * Constructors.

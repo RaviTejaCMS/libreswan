@@ -38,8 +38,6 @@
 #include <arpa/inet.h>
 #include <resolv.h>
 
-#include "libreswan/pfkeyv2.h"
-
 #include "sysdep.h"
 #include "constants.h"
 #include "lswalloc.h"
@@ -89,7 +87,7 @@ static void swap_ends(struct connection *c)
 	sr->that = t;
 
 	/*
-	 * in case of asymetric auth c->policy contains left.authby
+	 * in case of asymmetric auth c->policy contains left.authby
 	 * This magic will help responder to find connction during INIT
 	 */
 	if (sr->this.authby != sr->that.authby)
@@ -117,58 +115,166 @@ static void swap_ends(struct connection *c)
 	}
 }
 
+static bool orient_new_iface_port(struct connection *c, struct fd *whackfd, bool this)
+{
+	struct end *end = (this ? &c->spd.this : &c->spd.that);
+	if (end->raw.host.ikeport == 0) {
+		return false;
+	}
+	if (!address_is_set(&end->host_addr)) {
+		return false;
+	}
+	struct iface_dev *dev = find_iface_dev_by_address(&end->host_addr);
+	if (dev == NULL) {
+		return false;
+	}
+	/*
+	 * assume UDP for now
+	 *
+	 * A custom IKEPORT should not float away to port 4500.  For
+	 * now leave ADD_IKE_ENCAPSULATION_PREFIX clear so it can talk
+	 * to port 500.  Perhaps it doesn't belong in iface?
+	 */
+	struct iface_port *ifp = bind_iface_port(dev, &udp_iface_io,
+						 ip_hport(end->raw.host.ikeport),
+						 true/*esp_encapsulation_enabled*/,
+						 false/*float_nat_initiator*/);
+	if (ifp == NULL) {
+		dbg("could not create new interface");
+		return false;
+	}
+	endpoint_buf b;
+	log_global(RC_LOG, whackfd, "adding interface %s %s",
+		   ifp->ip_dev->id_rname,
+		   str_endpoint(&ifp->local_endpoint, &b));
+	c->interface = ifp;
+	if (!this) {
+		dbg("swapping to that; new interface");
+		swap_ends(c);
+	}
+	if (listening) {
+		struct logger logger = CONNECTION_LOGGER(c, whackfd);
+		listen_on_iface_port(ifp, &logger);
+	}
+	return true;
+}
+
+static bool end_matches_port(const struct end *end, const struct end *other,
+			     const struct iface_port *ifp)
+{
+	/*
+	 * XXX: something stomps on .host_addr turning it into an
+	 * endpoint - .ipproto gets set; hack around it
+	 */
+	ip_address host_addr = strip_endpoint(&end->host_addr, HERE);
+	/*
+	 * First choice is the IKEPORT.  Second choice, when the other
+	 * end is using IKEPORT, is to use the PLUTO_NAT_PORT -
+	 * IKEPORT assumes esp encapsulation which means sending the
+	 * ESP=0 prefix and that doesn't work with PLUTO_PORT.
+	 */
+	ip_port port = ip_hport(end->raw.host.ikeport ? end->raw.host.ikeport :
+				other->raw.host.ikeport ? NAT_IKE_UDP_PORT :
+				IKE_UDP_PORT);
+	ip_endpoint host_end = endpoint3(ifp->protocol, &host_addr, port);
+	return endpoint_eq(host_end, ifp->local_endpoint);
+}
 
 bool orient(struct connection *c)
 {
 	struct fd *whackfd = whack_log_fd; /* placeholder */
-	if (!oriented(*c)) {
-		const struct iface_port *p;
-		struct spd_route *sr = &c->spd;
-		for (p = interfaces; p != NULL; p = p->next) {
-			if (p->ike_float)
-				continue;
-
-			for (;;) {
-				/* check if this interface matches this end */
-				if (sameaddr(&sr->this.host_addr,
-					     &p->local_endpoint) &&
-				    (kernel_ops->type != NO_KERNEL ||
-				     sr->this.host_port ==
-				     pluto_port)) {
-					if (oriented(*c)) {
-						if (c->interface->ip_dev == p->ip_dev) {
-							char cib[CONN_INST_BUF];
-							loglog(RC_LOG_SERIOUS,
-								"both sides of \"%s\"%s are our interface %s!",
-								c->name, fmt_conn_instance(c, cib),
-								p->ip_dev->id_rname);
-						} else {
-							char cib[CONN_INST_BUF];
-							loglog(RC_LOG_SERIOUS, "two interfaces match \"%s\"%s (%s, %s)",
-								c->name, fmt_conn_instance(c, cib),
-								c->interface->ip_dev->id_rname,
-								p->ip_dev->id_rname);
-							}
-						terminate_connection(c->name, false, whackfd);
-						c->interface = NULL; /* withdraw orientation */
-						return FALSE;
-					}
-					c->interface = p;
-				}
-
-				/* done with this interface if it doesn't match that end */
-				if (!(sameaddr(&sr->that.host_addr,
-					       &p->local_endpoint) &&
-				      (kernel_ops->type != NO_KERNEL ||
-				       sr->that.host_port ==
-				       pluto_port)))
-					break;
-
-				swap_ends(c);
-			}
-		}
+	if (oriented(*c)) {
+		dbg("already oriented");
+		return true;
 	}
-	return oriented(*c);
+
+	dbg("orienting %s", c->name);
+	bool swap = false;
+	for (const struct iface_port *ifp = interfaces; ifp != NULL; ifp = ifp->next) {
+
+		/* XXX: check connection allows p->protocol? */
+		bool this = end_matches_port(&c->spd.this, &c->spd.that, ifp);
+		bool that = end_matches_port(&c->spd.that, &c->spd.this, ifp);
+
+		if (this && that) {
+			/* too many choices */
+			connection_buf cib;
+			log_global(RC_LOG_SERIOUS, whackfd,
+				   "both sides of "PRI_CONNECTION" are our interface %s!",
+				   pri_connection(c, &cib),
+				   ifp->ip_dev->id_rname);
+			terminate_connection(c->name, false, whackfd);
+			c->interface = NULL; /* withdraw orientation */
+			return false;
+		}
+
+		if (!this && !that) {
+			endpoint_buf eb;
+			dbg("%s doesn't match %s at all",
+			    c->name, str_endpoint(&ifp->local_endpoint, &eb));
+			continue;
+		}
+		pexpect(this != that); /* only one */
+
+		if (oriented(*c)) {
+			/* oops, second match */
+			if (c->interface->ip_dev == ifp->ip_dev) {
+				connection_buf cib;
+				log_global(RC_LOG_SERIOUS, whackfd,
+					   "both sides of "PRI_CONNECTION" are our interface %s!",
+					   pri_connection(c, &cib),
+					   ifp->ip_dev->id_rname);
+			} else {
+				/*
+				 * XXX: if an interface has two
+				 * addresses vis <<ip addr add
+				 * 192.1.2.23/24 dev eth1>> this log
+				 * line doesn't differnetiate.
+				 */
+				connection_buf cib;
+				address_buf cb, ifpb;
+				log_global(RC_LOG_SERIOUS, whackfd,
+					   "two interfaces match \"%s\"%s (%s %s, %s %s)",
+					   pri_connection(c, &cib),
+					   c->interface->ip_dev->id_rname,
+					   str_address(&c->interface->ip_dev->id_address, &cb),
+					   ifp->ip_dev->id_rname,
+					   str_address(&ifp->ip_dev->id_address, &ifpb));
+			}
+			terminate_connection(c->name, false, whackfd);
+			c->interface = NULL; /* withdraw orientation */
+			return false;
+		}
+
+		/* orient then continue search */
+		if (this) {
+			dbg("oriented %s's this", c->name);
+			swap = false;
+		} else if (that) {
+			dbg("oriented %s's that", c->name);
+			swap = true;
+		}
+		c->interface = ifp;
+		passert(oriented(*c));
+	}
+	if (oriented(*c)) {
+		if (swap) {
+			dbg("swapping ends so that that is this")
+			swap_ends(c);
+		}
+		return true;
+	}
+
+	/*
+	 * No existing interface worked, should a new one be created?
+	 */
+	if (orient_new_iface_port(c, whackfd, true)) {
+		return true;
+	}
+	if (orient_new_iface_port(c, whackfd, false)) {
+		return true;
+	}
+	return false;
 }
 
 struct initiate_stuff {
@@ -456,8 +562,7 @@ void restart_connections_by_peer(struct connection *const c)
 
 	if (c_kind == CK_INSTANCE && hp_next == NULL) {
 		/* in simple cases this is  a dangling hp */
-		DBG(DBG_CONTROL,
-			DBG_log ("no connection to restart after termination"));
+		dbg("no connection to restart after termination");
 	} else {
 		for (d = hp->connections; d != NULL; d = d->hp_next) {
 			if (same_host(dnshostname, &host_addr,
@@ -474,7 +579,7 @@ void restart_connections_by_peer(struct connection *const c)
  * This may involve discovering a gateway and instantiating an
  * Opportunistic connection.  Called when a packet is caught by
  * a %trap, or when whack --oppohere --oppothere is used.
- * It may turn out that an existing or non-opporunistic connnection
+ * It may turn out that an existing or non-opporunistic connection
  * can handle the traffic.
  *
  * Most of the code will be restarted if an ADNS request is made
@@ -513,10 +618,10 @@ static void cannot_oppo(struct find_oppo_bundle *b, err_t ughmsg)
 	address_buf pcb_buf;
 	const char *pcb = ipstr(&b->peer_client, &pcb_buf);
 
-	enum stream logger_stream = (DBGP(DBG_OPPO) ? ALL_STREAMS : WHACK_STREAM);
-	loglog_global(logger_stream | RC_OPPOFAILURE, b->whackfd,
-		      "cannot opportunistically initiate for %s to %s: %s",
-		      ocb, pcb, ughmsg);
+	enum stream logger_stream = (DBGP(DBG_BASE) ? ALL_STREAMS : WHACK_STREAM);
+	log_global(logger_stream | RC_OPPOFAILURE, b->whackfd,
+		   "cannot opportunistically initiate for %s to %s: %s",
+		   ocb, pcb, ughmsg);
 
 	if (b->held) {
 		/* this was filled in for us based on packet trigger, not whack --oppo trigger */
@@ -536,7 +641,7 @@ static void cannot_oppo(struct find_oppo_bundle *b, err_t ughmsg)
 			dbg("cannot_oppo() replaced negotiationshunt with bare failureshunt=%s",
 			    enum_short_name(&spi_names, b->failure_shunt));
 		} else {
-			loglog_global(RC_LOG, b->whackfd, "cannot_oppo() failed to replace negotiationshunt with bare failureshunt");
+			log_global(RC_LOG, b->whackfd, "cannot_oppo() failed to replace negotiationshunt with bare failureshunt");
 		}
 	}
 }
@@ -545,77 +650,131 @@ static void initiate_ondemand_body(struct find_oppo_bundle *b,
 				   struct xfrm_user_sec_ctx_ike *uctx)
 {
 	threadtime_t inception = threadtime_start();
-	struct connection *c = NULL;
-	struct spd_route *sr;
-	int ourport, hisport;
+
+	/*
+	 * XXX: this function gets called either with a real trigger
+	 * (which includes ports) or with:
+	 *
+	 *    ipsec whack --oppohere 192.1.3.209 --oppothere 192.1.2.23
+	 *
+	 * which does not.  So output matches tests the string below
+	 * forces addr:port and not end (latter strips of 0 port).
+	 */
+	ip_address our_address = endpoint_address(&b->our_client);
+	ip_address peer_address = endpoint_address(&b->peer_client);
+
+	int our_port = endpoint_hport(&b->our_client);
+	int peer_port = endpoint_hport(&b->peer_client);
+
+	address_buf ourb;
+	const char *our_addr = str_address(&our_address, &ourb);
+	address_buf peerb;
+	const char *peer_addr = str_address(&peer_address, &peerb);
+
+	if (uctx != NULL) {
+		dbg("received security label string: %.*s",
+		    uctx->ctx.ctx_len,
+		    uctx->sec_ctx_value);
+	}
+
 	char demandbuf[256];
-	bool loggedit = FALSE;
+	snprintf(demandbuf, sizeof(demandbuf),
+		 "initiate on demand from %s:%d to %s:%d proto=%d because: %s",
+		 our_addr, our_port, peer_addr, peer_port,
+		 b->transport_proto, b->want);
+
+	/* ??? DBG and real-world code mixed */
+	bool loggedit = false;
+	if (DBGP(DBG_BASE)) {
+		libreswan_log("%s", demandbuf);
+		loggedit = true;
+	} else if (fd_p(b->whackfd)) {
+		whack_log(RC_COMMENT, b->whackfd, "%s", demandbuf);
+		loggedit = true;
+	}
 
 	/* What connection shall we use?
 	 * First try for one that explicitly handles the clients.
 	 */
 
-	address_buf ourb;
-	const char *ours = ipstr(&b->our_client, &ourb);
-	address_buf hisb;
-	const char *his = ipstr(&b->peer_client, &hisb);
-
-	ourport = ntohs(portof(&b->our_client));
-	hisport = ntohs(portof(&b->peer_client));
-
-	DBG(DBG_CONTROLMORE, {
-		if (uctx != NULL) {
-			DBG_log("received security label string: %.*s",
-				uctx->ctx.ctx_len,
-				uctx->sec_ctx_value);
-		}
-	});
-
-	snprintf(demandbuf, sizeof(demandbuf),
-		 "initiate on demand from %s:%d to %s:%d proto=%d because: %s",
-		 ours, ourport, his, hisport, b->transport_proto, b->want);
-
-
-	/* ??? DBG and real-world code mixed */
-	if (DBGP(DBG_OPPOINFO)) {
-		libreswan_log("%s", demandbuf);
-		loggedit = TRUE;
-	} else if (fd_p(b->whackfd)) {
-		whack_log(RC_COMMENT, b->whackfd, "%s", demandbuf);
-		loggedit = TRUE;
-	}
-
 	if (isanyaddr(&b->our_client) || isanyaddr(&b->peer_client)) {
 		cannot_oppo(b, "impossible IP address");
-	} else if (sameaddr(&b->our_client, &b->peer_client)) {
+		return;
+	}
+
+	if (sameaddr(&b->our_client, &b->peer_client)) {
 		/* NETKEY gives us acquires for our own IP */
 		/* this does not catch talking to ourselves on another ip */
 		cannot_oppo(b, "acquire for our own IP address");
-	} else if ((c = find_connection_for_clients(&sr,
-						     &b->our_client,
-						     &b->peer_client,
-						     b->transport_proto))
-		   == NULL) {
+		return;
+	}
+
+	struct spd_route *sr;
+	struct connection *c = find_connection_for_clients(&sr,
+							   &b->our_client,
+							   &b->peer_client,
+							   b->transport_proto);
+	if (c == NULL) {
 		/* No connection explicitly handles the clients and there
 		 * are no Opportunistic connections -- whine and give up.
 		 * The failure policy cannot be gotten from a connection; we pick %pass.
 		 */
 		if (!loggedit) {
-			libreswan_log("%s", demandbuf);
+			log_global(RC_LOG, b->whackfd, "%s", demandbuf);
 		}
-
 		cannot_oppo(b, "no routed template covers this pair");
-	} else if ((c->policy & POLICY_OPPORTUNISTIC) && !orient(c)) {
+		return;
+	}
+
+	if ((c->policy & POLICY_OPPORTUNISTIC) && !orient(c)) {
 		/* happens when dst is ourselves on a different IP */
 		cannot_oppo(b, "connection to self on another IP?");
-	}  else if (c->kind == CK_TEMPLATE && (c->policy & POLICY_OPPORTUNISTIC) == 0) {
+		return;
+	}
+
+	if (c->kind == CK_TEMPLATE && (c->policy & POLICY_OPPORTUNISTIC) == 0) {
 		if (!loggedit) {
-			libreswan_log("%s", demandbuf);
+			log_global(RC_LOG, b->whackfd, "%s", demandbuf);
 		}
-		loglog(RC_NOPEERIP,
-		       "cannot initiate connection for packet %s:%d -> %s:%d proto=%d - template conn",
-		       ours, ourport, his, hisport, b->transport_proto);
-	} else if (c->kind != CK_TEMPLATE) {
+		log_global(RC_NOPEERIP, b->whackfd,
+			   "cannot initiate connection for packet %s:%d -> %s:%d proto=%d - template conn",
+			   our_addr, our_port, peer_addr, peer_port,
+			   b->transport_proto);
+		return;
+	}
+
+	if (c->kind == CK_INSTANCE) {
+		connection_buf cib;
+		/* there is already an instance being negotiated */
+#if 0
+		log_global(RC_LOG, b->whackfd,
+			   "rekeying existing instance "PRI_CONNECTION", due to acquire",
+			   pri_connection(c, &cib));
+
+		/*
+		 * we used to return here, but rekeying is a better choice. If we
+		 * got the acquire, it is because something turned stuff into a
+		 * %trap, or something got deleted, perhaps due to an expiry.
+		 */
+#else
+		/*
+		 * XXX We got an acquire (NETKEY only?) for
+		 * something we already have an instance for ??
+		 * We cannot process as normal because the
+		 * bare_shunts table and assign_holdpass()
+		 * would get confused between this new entry
+		 * and the existing one. So we return without
+		 * doing anything
+		 */
+		log_global(RC_LOG, b->whackfd,
+			   "ignoring found existing connection instance "PRI_CONNECTION" that covers kernel acquire with IKE state #%lu and IPsec state #%lu - due to duplicate acquire?",
+			   pri_connection(c, &cib),
+			   c->newest_isakmp_sa, c->newest_ipsec_sa);
+		return;
+#endif
+	}
+
+	if (c->kind != CK_TEMPLATE) {
 		/* We've found a connection that can serve.
 		 * Do we have to initiate it?
 		 * Not if there is currently an IPSEC SA.
@@ -624,37 +783,6 @@ static void initiate_ondemand_body(struct find_oppo_bundle *b,
 		 */
 
 		/* If we are to proceed asynchronously, b->whackfd will be NULL_WHACKFD. */
-
-		if (c->kind == CK_INSTANCE) {
-			char cib[CONN_INST_BUF];
-			/* there is already an instance being negotiated */
-#if 0
-			libreswan_log(
-				"rekeying existing instance \"%s\"%s, due to acquire",
-				c->name,
-				fmt_conn_instance(c, cib));
-
-			/*
-			 * we used to return here, but rekeying is a better choice. If we
-			 * got the acquire, it is because something turned stuff into a
-			 * %trap, or something got deleted, perhaps due to an expiry.
-			 */
-#else
-			/*
-			 * XXX We got an acquire (NETKEY only?) for
-			 * something we already have an instance for ??
-			 * We cannot process as normal because the
-			 * bare_shunts table and assign_holdpass()
-			 * would get confused between this new entry
-			 * and the existing one. So we return without
-			 * doing anything
-			 */
-			libreswan_log("ignoring found existing connection instance \"%s\"%s that covers kernel acquire with IKE state #%lu and IPsec state #%lu - due to duplicate acquire?",
-				c->name, fmt_conn_instance(c, cib),
-				c->newest_isakmp_sa, c->newest_ipsec_sa);
-			return;
-#endif
-		}
 
 		/* we have a connection, fill in the negotiation_shunt and failure_shunt */
 		b->failure_shunt = shunt_policy_spi(c, FALSE);
@@ -670,234 +798,223 @@ static void initiate_ondemand_body(struct find_oppo_bundle *b,
 					   &b->our_client, &b->peer_client)) {
 				dbg("initiate_ondemand_body() installed negotiation_shunt,");
 			} else {
-				libreswan_log("initiate_ondemand_body() failed to install negotiation_shunt,");
+				log_global(RC_LOG, b->whackfd,
+					   "initiate_ondemand_body() failed to install negotiation_shunt,");
 			}
 		}
 
 		if (!loggedit) {
-			libreswan_log("%s", demandbuf);
+			log_global(RC_LOG, b->whackfd, "%s", demandbuf);
 		}
 
 		ipsecdoi_initiate(b->background ? null_fd : b->whackfd,
 				  c, c->policy, 1,
 				  SOS_NOBODY, &inception, uctx);
-	} else {
-		/* We are handling an opportunistic situation.
-		 * This involves several DNS lookup steps that require suspension.
-		 * NOTE: will be re-implemented
-		 *
-		 * old comment:
-		 * The first chunk of code handles the result of the previous
-		 * DNS query (if any).  It also selects the kind of the next step.
-		 * The second chunk initiates the next DNS query (if any).
-		 */
-
-		DBG(DBG_CONTROL, {
-			    char cib[CONN_INST_BUF];
-			    DBG_log("creating new instance from \"%s\"%s",
-				    c->name,
-				    fmt_conn_instance(c, cib));
-		    });
-
-		if (sr->routing == RT_ROUTED_PROSPECTIVE && eclipsable(sr)) {
-			dbg("route is eclipsed");
-			sr->routing = RT_ROUTED_ECLIPSED;
-			eclipse_count++;
-		}
-
-		passert(c->policy & POLICY_OPPORTUNISTIC); /* can't initiate Road Warrior connections */
-
-		/* we have a connection, fill in the negotiation_shunt and failure_shunt */
-		b->failure_shunt = shunt_policy_spi(c, FALSE);
-		b->negotiation_shunt = (c->policy & POLICY_NEGO_PASS) ? SPI_PASS : SPI_HOLD;
-
-
-
-			/*
-			 * XFRM always has shunts with protoports, even when no *protoport= settings in conn
-			 */
-			if (b->negotiation_shunt != SPI_HOLD ||
-				(b->transport_proto != 0 ||
-				ourport != 0 ||
-				hisport != 0))
-			{
-				const char *const delmsg = "delete bare kernel shunt - was replaced with  negotiationshunt";
-				const char *const addwidemsg = "oe-negotiating";
-				ip_subnet this_client, that_client;
-				int shunt_proto = b->transport_proto;
-
-				happy(addrtosubnet(&b->our_client, &this_client));
-				happy(addrtosubnet(&b->peer_client, &that_client));
-				/* OLD: negotiationshunt must be wider than bare shunt, esp on NETKEY */
-				/* if the connection we found has protoports, match those for the shunt */
-
-
-				setportof(0, &this_client.addr); /* always catch all ephemeral to dest */
-				setportof(0, &that_client.addr); /* default unless connection says otherwise */
-				if (b->transport_proto != 0) {
-					if (c->spd.that.protocol == 0) {
-						DBG(DBG_OPPO, DBG_log("shunt widened for protoports since conn does not limit protocols"));
-						shunt_proto = 0;
-						ourport = 0;
-						hisport =0;
-					} else {
-						if (hisport != 0) {
-							if (c->spd.that.port != 0) {
-								if (c->spd.that.port != hisport) {
-									loglog(RC_LOG_SERIOUS, "Dragons! connection port %d mismatches shunt dest port %d",
-										c->spd.that.port, hisport);
-								} else {
-									update_subnet_hport(&that_client, hisport);
-									DBG(DBG_OPPO, DBG_log("bare shunt destination port set to %d", hisport));
-								}
-							} else {
-								DBG(DBG_OPPO, DBG_log("not really expecting a shunt for dport 0 ?"));
-							}
-						}
-					}
-				} else {
-					DBG(DBG_OPPO, DBG_log("shunt not widened for oppo because no protoport received from the kernel for the shunt"));
-				}
-
-				DBG(DBG_OPPO,
-					DBG_log("going to initiate opportunistic, first installing %s negotiationshunt",
-						enum_short_name(&spi_names, b->negotiation_shunt)));
-
-				// PAUL: should this use shunt_eroute() instead of API violation into raw_eroute()
-				/* if we have protoport= set, narrow to it. zero out ephemeral port */
-				if (shunt_proto != 0) {
-					if (c->spd.this.port != 0)
-						setportof(portof(&b->our_client), &this_client.addr);
-					if (c->spd.that.port != 0)
-						setportof(portof(&b->peer_client), &that_client.addr);
-				}
-
-				if (!raw_eroute(&b->our_client, &this_client,
-					&b->peer_client, &that_client,
-					htonl(SPI_HOLD), /* kernel induced */
-					htonl(b->negotiation_shunt),
-					&ip_protocol_internal, shunt_proto,
-					ET_INT, null_proto_info,
-					deltatime(SHUNT_PATIENCE),
-					calculate_sa_prio(c, LIN(POLICY_OPPORTUNISTIC, c->policy) ? TRUE : FALSE),
-					NULL, 0 /* xfrm-if-id */,
-					ERO_ADD, addwidemsg,
-					NULL))
-				{
-					libreswan_log("adding bare wide passthrough negotiationshunt failed");
-				} else {
-					DBG(DBG_OPPO, DBG_log("added bare (possibly wided) passthrough negotiationshunt succeeded (violating API)"));
-					add_bare_shunt(&this_client, &that_client, shunt_proto, SPI_HOLD, addwidemsg);
-				}
-				/* now delete the (obsoleted) narrow bare kernel shunt - we have a (possibly broadened) negotiationshunt replacement installed */
-				if (!delete_bare_shunt(&b->our_client, &b->peer_client,
-					b->transport_proto, SPI_HOLD /* kernel dictated */, delmsg))
-				{
-					libreswan_log("Failed to: %s", delmsg);
-				} else {
-					DBG(DBG_OPPO, DBG_log("success taking down narrow bare shunt"));
-				}
-			}
-
-
-			c = build_outgoing_opportunistic_connection(
-				&b->our_client,
-				&b->peer_client,
-				b->transport_proto);
-
-			if (c == NULL) {
-				/* We cannot seem to instantiate a suitable connection:
-				 * complain clearly.
-				 */
-				ipstr_buf b1, b2;
-
-				/* ??? CLANG 3.5 thinks ac might be NULL (look up) */
-				loglog(RC_OPPOFAILURE,
-				       "no suitable connection for opportunism between %s and %s",
-				       ipstr(&b->our_client, &b1),
-				       ipstr(&b->peer_client, &b2));
-
-				/*
-				 * Replace negotiation_shunt with failure_shunt
-				 * The type of replacement *ought* to be
-				 * specified by policy, but we did not find a connection, so
-				 * default to HOLD
-				 */
-				if (b->held) {
-					if (replace_bare_shunt(
-						&b->our_client,
-						&b->peer_client,
-						b->policy_prio,
-						b->negotiation_shunt, /* if not from conn, where did this come from? */
-						b->failure_shunt, /* if not from conn, where did this come from? */
-						b->transport_proto,
-						"no suitable connection")) {
-							DBG(DBG_OPPO, DBG_log("replaced negotiationshunt with failurehunt=hold because no connection was found"));
-					} else {
-						libreswan_log("failed to replace negotiationshunt with failurehunt=hold");
-					}
-				}
-				/* ??? c == NULL -- what can we do? */
-			} else {
-				/* If we are to proceed asynchronously, b->whackfd will be NULL_WHACKFD. */
-				passert(c->kind == CK_INSTANCE);
-				passert(HAS_IPSEC_POLICY(c->policy));
-				passert(LHAS(LELEM(RT_UNROUTED) |
-					     LELEM(RT_ROUTED_PROSPECTIVE),
-					     c->spd.routing));
-				if (b->held) {
-					/* if we have protoport= set, narrow to it. zero out ephemeral port */
-					if (b->transport_proto != 0) {
-						if (c->spd.this.port != 0) {
-							setportof(htons(c->spd.this.port), &b->our_client);
-						}
-						if (c->spd.that.port != 0) {
-							setportof(htons(c->spd.that.port), &b->peer_client);
-						}
-					}
-					/* packet triggered - not whack triggered */
-					DBG(DBG_OPPO, DBG_log("assigning negotiation_shunt to connection"));
-					/* if we have protoport= set, narrow to it. zero out ephemeral port */
-					/* warning: we know ports in this_client/that_client are 0 so far */
-					if (c->spd.this.protocol != 0) {
-						if (c->spd.this.port != 0)
-							setportof(portof(&b->our_client), &c->spd.this.client.addr);
-						if (c->spd.that.port != 0)
-							setportof(portof(&b->peer_client), &c->spd.that.client.addr);
-					}
-					if (assign_holdpass(c, &c->spd,
-						   b->transport_proto,
-						   b->negotiation_shunt,
-						   &b->our_client,
-						   &b->peer_client)) {
-						DBG(DBG_CONTROL, DBG_log("assign_holdpass succeeded"));
-					} else {
-						libreswan_log("assign_holdpass failed!");
-					}
-				}
-				DBG(DBG_OPPO | DBG_CONTROL,
-				    DBG_log("initiate on demand from %s:%d to %s:%d proto=%d because: %s",
-					    ours, ourport, his, hisport,
-					    b->transport_proto,
-					    b->want));
-
-				ipsecdoi_initiate(b->background ? null_fd : b->whackfd,
-						  c, c->policy, 1,
-						  SOS_NOBODY, &inception
-						  , NULL /* shall we pass uctx for opportunistic connections? */
-						  );
-			}
-	}
-
-	/* the second chunk: initiate the next DNS query (if any) */
-	if (c != NULL) {
 		address_buf b1;
 		address_buf b2;
 		dbg("initiate on demand using %s from %s to %s",
 		    (c->policy & POLICY_AUTH_NULL) ? "AUTH_NULL" : "RSASIG",
 		    str_address(&b->our_client, &b1),
 		    str_address(&b->peer_client, &b2));
+		return;
 	}
+
+	/* We are handling an opportunistic situation.
+	 * This involves several DNS lookup steps that require suspension.
+	 * NOTE: will be re-implemented
+	 *
+	 * old comment:
+	 * The first chunk of code handles the result of the previous
+	 * DNS query (if any).  It also selects the kind of the next step.
+	 * The second chunk initiates the next DNS query (if any).
+	 */
+
+	connection_buf cib;
+	dbg("creating new instance from "PRI_CONNECTION, pri_connection(c, &cib));
+
+	if (sr->routing == RT_ROUTED_PROSPECTIVE && eclipsable(sr)) {
+		dbg("route is eclipsed");
+		sr->routing = RT_ROUTED_ECLIPSED;
+		eclipse_count++;
+	}
+
+	pexpect(c->kind == CK_TEMPLATE);
+	passert(c->policy & POLICY_OPPORTUNISTIC); /* can't initiate Road Warrior connections */
+
+	/* we have a connection, fill in the negotiation_shunt and failure_shunt */
+	b->failure_shunt = shunt_policy_spi(c, FALSE);
+	b->negotiation_shunt = (c->policy & POLICY_NEGO_PASS) ? SPI_PASS : SPI_HOLD;
+
+	/*
+	 * XFRM always has shunts with protoports, even when no *protoport= settings in conn
+	 */
+	if (b->negotiation_shunt != SPI_HOLD ||
+	    (b->transport_proto != 0 ||
+	     our_port != 0 ||
+	     peer_port != 0)) {
+		const char *const delmsg = "delete bare kernel shunt - was replaced with  negotiationshunt";
+		const char *const addwidemsg = "oe-negotiating";
+		ip_subnet this_client, that_client;
+		int shunt_proto = b->transport_proto;
+
+		happy(endtosubnet(&b->our_client, &this_client, HERE));
+		happy(endtosubnet(&b->peer_client, &that_client, HERE));
+		/* OLD: negotiationshunt must be wider than bare shunt, esp on NETKEY */
+		/* if the connection we found has protoports, match those for the shunt */
+
+		setportof(0, &this_client.addr); /* always catch all ephemeral to dest */
+		setportof(0, &that_client.addr); /* default unless connection says otherwise */
+		if (b->transport_proto != 0) {
+			if (c->spd.that.protocol == 0) {
+				dbg("shunt widened for protoports since conn does not limit protocols");
+				shunt_proto = 0;
+				our_port = 0;
+				peer_port = 0;
+			} else {
+				if (peer_port != 0) {
+					if (c->spd.that.port != 0) {
+						if (c->spd.that.port != peer_port) {
+							log_global(RC_LOG_SERIOUS, b->whackfd,
+								   "Dragons! connection port %d mismatches shunt dest port %d",
+								   c->spd.that.port, peer_port);
+						} else {
+							update_selector_hport(&that_client, peer_port);
+							dbg("bare shunt destination port set to %d", peer_port);
+						}
+					} else {
+						dbg("not really expecting a shunt for dport 0 ?");
+					}
+				}
+			}
+		} else {
+			dbg("shunt not widened for oppo because no protoport received from the kernel for the shunt");
+		}
+
+		dbg("going to initiate opportunistic, first installing %s negotiationshunt",
+		    enum_short_name(&spi_names, b->negotiation_shunt));
+
+		// PAUL: should this use shunt_eroute() instead of API violation into raw_eroute()
+		/* if we have protoport= set, narrow to it. zero out ephemeral port */
+		if (shunt_proto != 0) {
+			if (c->spd.this.port != 0)
+				setportof(portof(&b->our_client), &this_client.addr);
+			if (c->spd.that.port != 0)
+				setportof(portof(&b->peer_client), &that_client.addr);
+		}
+
+		if (!raw_eroute(&b->our_client, &this_client,
+				&b->peer_client, &that_client,
+				htonl(SPI_HOLD), /* kernel induced */
+				htonl(b->negotiation_shunt),
+				&ip_protocol_internal, shunt_proto,
+				ET_INT, null_proto_info,
+				deltatime(SHUNT_PATIENCE),
+				calculate_sa_prio(c, LIN(POLICY_OPPORTUNISTIC, c->policy) ? TRUE : FALSE),
+				NULL, 0 /* xfrm-if-id */,
+				ERO_ADD, addwidemsg,
+				NULL)) {
+			log_global(RC_LOG, b->whackfd, "adding bare wide passthrough negotiationshunt failed");
+		} else {
+			dbg("added bare (possibly wided) passthrough negotiationshunt succeeded (violating API)");
+			add_bare_shunt(&this_client, &that_client, shunt_proto, SPI_HOLD, addwidemsg);
+		}
+		/* now delete the (obsoleted) narrow bare kernel shunt - we have a (possibly broadened) negotiationshunt replacement installed */
+		if (!delete_bare_shunt(&b->our_client, &b->peer_client,
+				       b->transport_proto,
+				       SPI_HOLD /* kernel dictated */, delmsg)) {
+			log_global(RC_LOG, b->whackfd, "Failed to: %s", delmsg);
+		} else {
+			dbg("success taking down narrow bare shunt");
+		}
+	}
+
+	/* XXX: re-use C */
+	c = build_outgoing_opportunistic_connection(&b->our_client,
+						    &b->peer_client,
+						    b->transport_proto);
+	if (c == NULL) {
+		/* We cannot seem to instantiate a suitable connection:
+		 * complain clearly.
+		 */
+		ipstr_buf b1, b2;
+
+		/* ??? CLANG 3.5 thinks ac might be NULL (look up) */
+		log_global(RC_OPPOFAILURE, b->whackfd,
+			   "no suitable connection for opportunism between %s and %s",
+			   ipstr(&b->our_client, &b1),
+			   ipstr(&b->peer_client, &b2));
+
+		/*
+		 * Replace negotiation_shunt with failure_shunt
+		 * The type of replacement *ought* to be
+		 * specified by policy, but we did not find a connection, so
+		 * default to HOLD
+		 */
+		if (b->held) {
+			if (replace_bare_shunt(&b->our_client,
+					       &b->peer_client,
+					       b->policy_prio,
+					       b->negotiation_shunt, /* if not from conn, where did this come from? */
+					       b->failure_shunt, /* if not from conn, where did this come from? */
+					       b->transport_proto,
+					       "no suitable connection")) {
+				dbg("replaced negotiationshunt with failurehunt=hold because no connection was found");
+			} else {
+				log_global(RC_LOG, b->whackfd,
+					   "failed to replace negotiationshunt with failurehunt=hold");
+			}
+		}
+		return;
+	}
+
+	/* If we are to proceed asynchronously, b->background will be true. */
+	passert(c->kind == CK_INSTANCE);
+	passert(HAS_IPSEC_POLICY(c->policy));
+	passert(LHAS(LELEM(RT_UNROUTED) |
+		     LELEM(RT_ROUTED_PROSPECTIVE),
+		     c->spd.routing));
+	if (b->held) {
+		/* if we have protoport= set, narrow to it. zero out ephemeral port */
+		if (b->transport_proto != 0) {
+			if (c->spd.this.port != 0) {
+				setportof(htons(c->spd.this.port), &b->our_client);
+			}
+			if (c->spd.that.port != 0) {
+				setportof(htons(c->spd.that.port), &b->peer_client);
+			}
+		}
+		/* packet triggered - not whack triggered */
+		dbg("assigning negotiation_shunt to connection");
+		/* if we have protoport= set, narrow to it. zero out ephemeral port */
+		/* warning: we know ports in this_client/that_client are 0 so far */
+		if (c->spd.this.protocol != 0) {
+			if (c->spd.this.port != 0)
+				setportof(portof(&b->our_client), &c->spd.this.client.addr);
+			if (c->spd.that.port != 0)
+				setportof(portof(&b->peer_client), &c->spd.that.client.addr);
+		}
+		if (assign_holdpass(c, &c->spd,
+				    b->transport_proto,
+				    b->negotiation_shunt,
+				    &b->our_client,
+				    &b->peer_client)) {
+			dbg("assign_holdpass succeeded");
+		} else {
+			log_global(RC_LOG, b->whackfd, "assign_holdpass failed!");
+		}
+	}
+
+	dbg("initiate on demand from %s:%d to %s:%d using %s proto=%d because: %s",
+	    our_addr, our_port, peer_addr, peer_port,
+	    (c->policy & POLICY_AUTH_NULL) ? "AUTH_NULL" : "RSASIG",
+	    b->transport_proto,
+	    b->want);
+
+	ipsecdoi_initiate(b->background ? null_fd : b->whackfd,
+			  c, c->policy, 1,
+			  SOS_NOBODY, &inception
+			  , NULL /* shall we pass uctx for opportunistic connections? */
+		);
 }
 
 void initiate_ondemand(const ip_address *our_client,
@@ -929,7 +1046,7 @@ void initiate_ondemand(const ip_address *our_client,
  * There ought to be only one.
  * This might get to be a bottleneck -- try hashing if it does.
  */
-struct connection *shunt_owner(const ip_subnet *ours, const ip_subnet *his)
+struct connection *shunt_owner(const ip_subnet *ours, const ip_subnet *peers)
 {
 	struct connection *c;
 
@@ -940,7 +1057,7 @@ struct connection *shunt_owner(const ip_subnet *ours, const ip_subnet *his)
 		for (sr = &c->spd; sr; sr = sr->spd_next) {
 			if (shunt_erouted(sr->routing) &&
 			    samesubnet(ours, &sr->this.client) &&
-			    samesubnet(his, &sr->that.client))
+			    samesubnet(peers, &sr->that.client))
 				return c;
 		}
 	}
@@ -983,7 +1100,7 @@ static void connection_check_ddns1(struct connection *c)
 		return;
 	}
 
-	if (c->spd.that.has_client_wildcard || c->spd.that.has_port_wildcard ||
+	if (c->spd.that.has_port_wildcard ||
 	    ((c->policy & POLICY_SHUNT_MASK) == POLICY_SHUNT_TRAP &&
 	     c->spd.that.has_id_wildcards)) {
 		connection_buf cib;
@@ -1053,7 +1170,7 @@ static void connection_check_ddns1(struct connection *c)
 	/* default client to subnet containing only self */
 	if (!c->spd.that.has_client) {
 		/* XXX: this uses ADDRESS:PORT */
-		addrtosubnet(&c->spd.that.host_addr, &c->spd.that.client);
+		endtosubnet(&c->spd.that.host_addr, &c->spd.that.client, HERE);
 	}
 
 	/*
@@ -1116,28 +1233,22 @@ void connection_check_phase2(struct fd *whackfd)
 		cnext = c->ac_next;
 
 		if (NEVER_NEGOTIATE(c->policy)) {
-			DBG(DBG_CONTROL, {
-				char cib[CONN_INST_BUF];
-				DBG_log("pending review: connection \"%s\"%s has no negotiated policy, skipped",
-					c->name, fmt_conn_instance(c, cib));
-			});
+			connection_buf cib;
+			dbg("pending review: connection "PRI_CONNECTION" has no negotiated policy, skipped",
+			    pri_connection(c, &cib));
 			continue;
 		}
 
 		if (!(c->policy & POLICY_UP)) {
-			char cib[CONN_INST_BUF];
-			DBG(DBG_CONTROL, {
-				DBG_log("pending review: connection \"%s\"%s was not up, skipped",
-					c->name, fmt_conn_instance(c, cib));
-			});
+			connection_buf cib;
+			dbg("pending review: connection "PRI_CONNECTION" was not up, skipped",
+			    pri_connection(c, &cib));
 			continue;
 		}
 
-		DBG(DBG_CONTROL, {
-			char cib[CONN_INST_BUF];
-			DBG_log("pending review: connection \"%s\"%s checked",
-				c->name, fmt_conn_instance(c, cib));
-		});
+		connection_buf cib;
+		dbg("pending review: connection "PRI_CONNECTION" checked",
+		    pri_connection(c, &cib));
 
 		if (pending_check_timeout(c)) {
 			struct state *p1st;

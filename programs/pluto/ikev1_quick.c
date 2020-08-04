@@ -293,19 +293,16 @@ static void compute_proto_keymat(struct state *st,
 					needed_len =
 						pi->attrs.transattrs.enckeylen
 						/ BITS_PER_BYTE;
-					DBG(DBG_PARSING,
-					    DBG_log("compute_proto_keymat: key_len=%d from peer",
-						    (int)needed_len));
+					dbg("compute_proto_keymat: key_len=%d from peer",
+					    (int)needed_len);
 				}
 				break;
 			}
 			bad_case(pi->attrs.transattrs.ta_ikev1_encrypt);
 		}
-		DBG(DBG_PARSING, DBG_log("compute_proto_keymat: needed_len (after ESP enc)=%d",
-					 (int)needed_len));
+		dbg("compute_proto_keymat: needed_len (after ESP enc)=%d", (int)needed_len);
 		needed_len += pi->attrs.transattrs.ta_integ->integ_keymat_size;
-		DBG(DBG_PARSING, DBG_log("compute_proto_keymat: needed_len (after ESP auth)=%d",
-					 (int)needed_len));
+		dbg("compute_proto_keymat: needed_len (after ESP auth)=%d", (int)needed_len);
 		break;
 
 	case PROTO_IPSEC_AH:
@@ -411,7 +408,7 @@ static bool decode_net_id(struct isakmp_ipsec_id *id,
 			/* XXX Could send notification back */
 			return false;
 		}
-		happy(addrtosubnet(&temp_address, net));
+		happy(endtosubnet(&temp_address, net, HERE));
 		subnet_buf b;
 		dbg("%s is %s", which, str_subnet(net, &b));
 		break;
@@ -427,9 +424,7 @@ static bool decode_net_id(struct isakmp_ipsec_id *id,
 		if (!pbs_in_address(&temp_mask, afi, id_pbs, "ID mask")) {
 			return false;
 		}
-		err_t ughmsg = initsubnet(&temp_address,
-					  masktocount(&temp_mask),
-					  '0', net);
+		err_t ughmsg = address_mask_to_subnet(&temp_address, &temp_mask, net);
 		if (ughmsg == NULL &&
 		    subnet_contains_no_addresses(net))
 			/* i.e., ::/128 or 0.0.0.0/32 */
@@ -483,9 +478,7 @@ static bool decode_net_id(struct isakmp_ipsec_id *id,
 	/* set the port selector */
 	setportof(htons(id->isaiid_port), &net->addr);
 
-	DBG(DBG_PARSING | DBG_CONTROL,
-	    DBG_log("%s protocol/port is %d/%d", which, id->isaiid_protoid,
-		    id->isaiid_port));
+	dbg("%s protocol/port is %d/%d", which, id->isaiid_protoid, id->isaiid_port);
 
 	return TRUE;
 }
@@ -581,9 +574,8 @@ static crypto_req_cont_func quick_outI1_continue;	/* type assertion */
 static void quick_outI1_continue(struct state *st, struct msg_digest *md UNUSED,
 				 struct pluto_crypto_req *r)
 {
-	DBG(DBG_CONTROL,
-		DBG_log("quick_outI1_continue for #%lu: calculated ke+nonce, sending I1",
-			st->st_serialno));
+	dbg("quick_outI1_continue for #%lu: calculated ke+nonce, sending I1",
+	    st->st_serialno);
 
 	pexpect(md == NULL); /* no packet */
 	passert(st != NULL);
@@ -615,9 +607,8 @@ void quick_outI1(struct fd *whack_sock,
 	st->sec_ctx = NULL;
 	if (uctx != NULL) {
 		st->sec_ctx = clone_thing(*uctx, "sec ctx structure");
-		DBG(DBG_CONTROL,
-		    DBG_log("pending phase 2 with security context \"%s\"",
-			    st->sec_ctx->sec_ctx_value));
+		dbg("pending phase 2 with security context \"%s\"",
+		    st->sec_ctx->sec_ctx_value);
 	}
 
 	st->st_myuserprotoid = c->spd.this.protocol;
@@ -674,7 +665,7 @@ void quick_outI1(struct fd *whack_sock,
 		lswlogf(buf, "}");
 	}
 
-	/* save for post crytpo logging */
+	/* save for post crypto logging */
 	st->st_ipsec_pred = replacing;
 
 	if (policy & POLICY_PFS) {
@@ -742,7 +733,8 @@ static stf_status quick_outI1_tail(struct pluto_crypto_req *r,
 
 	/* HASH(1) -- create and note space to be filled later */
 	struct v1_hash_fixup hash_fixup;
-	if (!emit_v1_HASH(V1_HASH_1, "outI1", QUICK_EXCHANGE,
+	if (!emit_v1_HASH(V1_HASH_1, "outI1",
+			  IMPAIR_v1_QUICK_EXCHANGE,
 			  st, &hash_fixup, &rbody)) {
 		return STF_INTERNAL_ERROR;
 	}
@@ -880,7 +872,7 @@ struct verify_oppo_bundle {
 				 * other things on DNS failure
 				 */
 	struct msg_digest *md;
-	struct p2id my, his;
+	struct p2id my, peers;
 	struct crypt_mac new_iv;
 	/* int whackfd; */	/* not needed because we are Responder */
 };
@@ -908,7 +900,7 @@ stf_status quick_inI1_outR1(struct state *p1st, struct msg_digest *md)
 		/* IDci (initiator is peer) */
 
 		if (!decode_net_id(&id_pd->payload.ipsec_id, &id_pd->pbs,
-				   &b.his.net, "peer client"))
+				   &b.peers.net, "peer client"))
 			return STF_FAIL + INVALID_ID_INFORMATION;
 
 		/* Hack for MS 818043 NAT-T Update.
@@ -924,15 +916,15 @@ stf_status quick_inI1_outR1(struct state *p1st, struct msg_digest *md)
 		if (id_pd->payload.ipsec_id.isaiid_idtype == ID_FQDN) {
 			loglog(RC_LOG_SERIOUS,
 			       "Applying workaround for MS-818043 NAT-T bug");
-			zero(&b.his.net);
-			happy(addrtosubnet(&c->spd.that.host_addr,
-					   &b.his.net));
+			zero(&b.peers.net);
+			happy(endtosubnet(&c->spd.that.host_addr,
+					  &b.peers.net, HERE));
 		}
 		/* End Hack for MS 818043 NAT-T Update */
 
-		b.his.proto = id_pd->payload.ipsec_id.isaiid_protoid;
-		b.his.port = id_pd->payload.ipsec_id.isaiid_port;
-		update_subnet_hport(&b.his.net, b.his.port);
+		b.peers.proto = id_pd->payload.ipsec_id.isaiid_protoid;
+		b.peers.port = id_pd->payload.ipsec_id.isaiid_port;
+		update_selector_hport(&b.peers.net, b.peers.port);
 
 		/* IDcr (we are responder) */
 
@@ -942,7 +934,7 @@ stf_status quick_inI1_outR1(struct state *p1st, struct msg_digest *md)
 
 		b.my.proto = IDci->payload.ipsec_id.isaiid_protoid;
 		b.my.port = IDci->payload.ipsec_id.isaiid_port;
-		update_subnet_hport(&b.my.net, b.my.port);
+		update_selector_hport(&b.my.net, b.my.port);
 
 		/*
 		 * if there is a NATOA payload, then use it as
@@ -974,11 +966,11 @@ stf_status quick_inI1_outR1(struct state *p1st, struct msg_digest *md)
 			nat_traversal_natoa_lookup(md, &hv);
 
 			if (address_is_specified(&hv.st_nat_oa)) {
-				addrtosubnet(&hv.st_nat_oa, &b.his.net);
+				endtosubnet(&hv.st_nat_oa, &b.peers.net, HERE);
 				subnet_buf buf;
 				loglog(RC_LOG_SERIOUS,
 				       "IDci was FQDN: %s, using NAT_OA=%s %d as IDci",
-				       idfqdn, str_subnet(&b.his.net, &buf),
+				       idfqdn, str_subnet(&b.peers.net, &buf),
 				       isanyaddr(&hv.st_nat_oa)/*XXX: always 0?*/);
 			}
 		}
@@ -988,10 +980,10 @@ stf_status quick_inI1_outR1(struct state *p1st, struct msg_digest *md)
 		    endpoint_type(&c->spd.that.host_addr))
 			return STF_FAIL;
 
-		happy(addrtosubnet(&c->spd.this.host_addr, &b.my.net));
-		happy(addrtosubnet(&c->spd.that.host_addr, &b.his.net));
-		b.his.proto = b.my.proto = 0;
-		b.his.port = b.my.port = 0;
+		happy(endtosubnet(&c->spd.this.host_addr, &b.my.net, HERE));
+		happy(endtosubnet(&c->spd.that.host_addr, &b.peers.net, HERE));
+		b.peers.proto = b.my.proto = 0;
+		b.peers.port = b.my.port = 0;
 	}
 	b.md = md;
 	save_new_iv(p1st, b.new_iv);
@@ -1020,7 +1012,7 @@ static stf_status quick_inI1_outR1_tail(struct verify_oppo_bundle *b)
 	struct state *const p1st = md->st;
 	struct connection *c = p1st->st_connection;
 	ip_subnet *our_net = &b->my.net,
-	*his_net = &b->his.net;
+	*peers_net = &b->peers.net;
 	struct hidden_variables hv;
 
 	{
@@ -1034,7 +1026,7 @@ static stf_status quick_inI1_outR1_tail(struct verify_oppo_bundle *b)
 		subnet_buf s1, d1;
 		libreswan_log("the peer proposed: %s:%d/%d -> %s:%d/%d",
 			      str_subnet(our_net, &s1), c->spd.this.protocol, c->spd.this.port,
-			      str_subnet(his_net, &d1), c->spd.that.protocol, c->spd.that.port);
+			      str_subnet(peers_net, &d1), c->spd.that.protocol, c->spd.that.port);
 	}
 
 	/* Now that we have identities of client subnets, we must look for
@@ -1042,22 +1034,20 @@ static stf_status quick_inI1_outR1_tail(struct verify_oppo_bundle *b)
 	 */
 	{
 		struct connection *p = find_client_connection(c,
-							      our_net, his_net,
+							      our_net, peers_net,
 							      b->my.proto,
 							      b->my.port,
-							      b->his.proto,
-							      b->his.port);
+							      b->peers.proto,
+							      b->peers.port);
 
 		if ((p1st->hidden_variables.st_nat_traversal &
 		      NAT_T_DETECTED) &&
 		     !(p1st->st_policy & POLICY_TUNNEL) &&
 		     p == NULL) {
 			p = c;
-			DBG(DBG_CONTROL, {
-				char cib[CONN_INST_BUF];
-				DBG_log("using something (we hope the IP we or they are NAT'ed to) for transport mode connection \"%s\"%s",
-				    p->name, fmt_conn_instance(p, cib));
-			});
+			connection_buf cib;
+			dbg("using something (we hope the IP we or they are NAT'ed to) for transport mode connection "PRI_CONNECTION"",
+			    pri_connection(p, &cib));
 		}
 
 		if (p == NULL) {
@@ -1076,10 +1066,10 @@ static stf_status quick_inI1_outR1_tail(struct verify_oppo_bundle *b)
 			me.protocol = b->my.proto;
 			me.port = b->my.port;
 
-			he.client = *his_net;
-			he.has_client = !subnetisaddr(his_net, &he.host_addr);
-			he.protocol = b->his.proto;
-			he.port = b->his.port;
+			he.client = *peers_net;
+			he.has_client = !subnetisaddr(peers_net, &he.host_addr);
+			he.protocol = b->peers.proto;
+			he.port = b->peers.port;
 
 			l = format_end(buf, sizeof(buf), &me, NULL, TRUE,
 				       LEMPTY, oriented(*c));
@@ -1101,9 +1091,8 @@ static stf_status quick_inI1_outR1_tail(struct verify_oppo_bundle *b)
 				/* Plain Road Warrior because no OPPO for IKEv1
 				 * instantiate, carrying over authenticated peer ID
 				 */
-				p = rw_instantiate(p,
-						   &c->spd.that.host_addr,
-						   his_net,
+				p = rw_instantiate(p, &c->spd.that.host_addr,
+						   peers_net,
 						   &c->spd.that.id);
 			}
 			/* temporarily bump up cur_debugging to get "using..." message
@@ -1113,56 +1102,46 @@ static stf_status quick_inI1_outR1_tail(struct verify_oppo_bundle *b)
 				lset_t old_cur_debugging = cur_debugging;
 
 				set_debugging(lmod(cur_debugging, p->extra_debugging));
-				DBG(DBG_CONTROL, {
-					char cib[CONN_INST_BUF];
-					DBG_log("using connection \"%s\"%s",
-						p->name, fmt_conn_instance(p, cib));
-				});
+				connection_buf cib;
+				dbg("using connection "PRI_CONNECTION"",
+				    pri_connection(p, &cib));
 				set_debugging(old_cur_debugging);
 			}
 			c = p;
 		}
 
 		/* fill in the client's true ip address/subnet */
-		DBG(DBG_CONTROLMORE,
-		    DBG_log("client wildcard: %s  port wildcard: %s  virtual: %s",
-			    bool_str(c->spd.that.has_client_wildcard),
-			    bool_str(c->spd.that.has_port_wildcard),
-			    bool_str(is_virtual_connection(c))));
-
-		if (c->spd.that.has_client_wildcard) {
-			c->spd.that.client = *his_net;
-			c->spd.that.has_client_wildcard = FALSE;
-		}
+		dbg("client: %s  port wildcard: %s  virtual: %s",
+		    bool_str(c->spd.that.has_client),
+		    bool_str(c->spd.that.has_port_wildcard),
+		    bool_str(is_virtual_connection(c)));
 
 		/* fill in the client's true port */
 		if (c->spd.that.has_port_wildcard) {
-			int port = htons(b->his.port);
+			int port = htons(b->peers.port);
 
 			setportof(port, &c->spd.that.host_addr);
 			setportof(port, &c->spd.that.client.addr);
 
-			c->spd.that.port = b->his.port;
+			c->spd.that.port = b->peers.port;
 			c->spd.that.has_port_wildcard = FALSE;
 		}
 
 		if (is_virtual_connection(c)) {
 			char cthat[END_BUF];
 
-			c->spd.that.client = *his_net;
+			c->spd.that.client = *peers_net;
 			c->spd.that.has_client = TRUE;
 			c->spd.that.virt = NULL;	/* ??? leak? */
 
-			if (subnetishost(his_net) &&
-			    addrinsubnet(&c->spd.that.host_addr, his_net)) {
+			if (subnetishost(peers_net) &&
+			    addrinsubnet(&c->spd.that.host_addr, peers_net)) {
 				c->spd.that.has_client = FALSE;
 			}
 
 			format_end(cthat, sizeof(cthat), &c->spd.that, NULL,
 				   TRUE, LEMPTY, oriented(*c));
-			DBG(DBG_CONTROLMORE,
-			    DBG_log("setting phase 2 virtual values to %s",
-				    cthat));
+			dbg("setting phase 2 virtual values to %s", cthat);
 		}
 	}
 
@@ -1202,8 +1181,8 @@ static stf_status quick_inI1_outR1_tail(struct verify_oppo_bundle *b)
 		set_cur_state(st);      /* (caller will reset) */
 		switch_md_st(md, st, HERE);	/* feed back new state */
 
-		st->st_peeruserprotoid = b->his.proto;
-		st->st_peeruserport = b->his.port;
+		st->st_peeruserprotoid = b->peers.proto;
+		st->st_peeruserport = b->peers.port;
 		st->st_myuserprotoid = b->my.proto;
 		st->st_myuserport = b->my.port;
 
@@ -1288,9 +1267,8 @@ static void quick_inI1_outR1_continue1(struct state *st,
 				       struct msg_digest *md,
 				       struct pluto_crypto_req *r)
 {
-	DBG(DBG_CONTROL,
-		DBG_log("quick_inI1_outR1_cryptocontinue1 for #%lu: calculated ke+nonce, calculating DH",
-			st->st_serialno));
+	dbg("quick_inI1_outR1_cryptocontinue1 for #%lu: calculated ke+nonce, calculating DH",
+	    st->st_serialno);
 
 	passert(st->st_connection != NULL);
 
@@ -1303,7 +1281,7 @@ static void quick_inI1_outR1_continue1(struct state *st,
 		start_dh_v1_secret(quick_inI1_outR1_continue2, "quick outR1 DH",
 				   st, SA_RESPONDER, st->st_pfs_group);
 		/*
-		 * XXX: Since more crypto has been requsted, MD needs
+		 * XXX: Since more crypto has been requested, MD needs
 		 * to be re suspended.  If the original crypto request
 		 * did everything this wouldn't be needed.
 		 */
@@ -1325,9 +1303,8 @@ static void quick_inI1_outR1_continue2(struct state *st,
 				       struct msg_digest *md,
 				       struct pluto_crypto_req *r)
 {
-	DBG(DBG_CONTROL,
-		DBG_log("quick_inI1_outR1_cryptocontinue2 for #%lu: calculated DH, sending R1",
-			st->st_serialno));
+	dbg("quick_inI1_outR1_cryptocontinue2 for #%lu: calculated DH, sending R1",
+	    st->st_serialno);
 
 	passert(st->st_connection != NULL);
 	passert(md != NULL);
@@ -1387,7 +1364,8 @@ static stf_status quick_inI1_outR1_continue12_tail(struct msg_digest *md,
 
 	struct v1_hash_fixup hash_fixup;
 	if (!emit_v1_HASH(V1_HASH_2, "quick inR1 outI2",
-			  QUICK_EXCHANGE, st, &hash_fixup, &rbody)) {
+			  IMPAIR_v1_QUICK_EXCHANGE,
+			  st, &hash_fixup, &rbody)) {
 		return STF_INTERNAL_ERROR;
 	}
 
@@ -1522,7 +1500,7 @@ static stf_status quick_inI1_outR1_continue12_tail(struct msg_digest *md,
 		return STF_INTERNAL_ERROR; /* ??? we may be partly committed */
 	}
 
-	DBG(DBG_CONTROLMORE, DBG_log("finished processing quick inI1"));
+	dbg("finished processing quick inI1");
 	return STF_OK;
 }
 
@@ -1570,9 +1548,8 @@ static void quick_inR1_outI2_continue(struct state *st,
 				      struct msg_digest *md,
 				      struct pluto_crypto_req *r)
 {
-	DBG(DBG_CONTROL,
-		DBG_log("quick_inR1_outI2_continue for #%lu: calculated ke+nonce, calculating DH",
-			st->st_serialno));
+	dbg("quick_inR1_outI2_continue for #%lu: calculated ke+nonce, calculating DH",
+	    st->st_serialno);
 
 	passert(st->st_connection != NULL);
 	passert(md != NULL);
@@ -1649,8 +1626,9 @@ stf_status quick_inR1_outI2_tail(struct msg_digest *md,
 				memcpy(idfqdn, IDcr->pbs.cur, idlen);
 				idfqdn[idlen] = '\0';
 
-				addrtosubnet(&st->hidden_variables.st_nat_oa,
-					     &st->st_connection->spd.that.client);
+				endtosubnet(&st->hidden_variables.st_nat_oa,
+					    &st->st_connection->spd.that.client,
+					    HERE);
 				subnet_buf buf;
 				loglog(RC_LOG_SERIOUS,
 				       "IDcr was FQDN: %s, using NAT_OA=%s as IDcr",
@@ -1719,7 +1697,7 @@ stf_status quick_inR1_outI2_tail(struct msg_digest *md,
 		}
 #else
 		if (!emit_v1_HASH(V1_HASH_3, "quick_inR1_outI2",
-				  QUICK_EXCHANGE, st, &hash_fixup, &rbody)) {
+				  IMPAIR_v1_QUICK_EXCHANGE, st, &hash_fixup, &rbody)) {
 			return STF_INTERNAL_ERROR;
 		}
 #endif

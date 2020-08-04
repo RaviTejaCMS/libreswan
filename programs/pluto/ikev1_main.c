@@ -38,8 +38,6 @@
 #include <arpa/inet.h>
 #include <resolv.h>
 
-#include "libreswan/pfkeyv2.h"
-
 #include "sysdep.h"
 #include "constants.h"
 #include "defs.h"
@@ -632,8 +630,8 @@ stf_status main_inI1_outR1(struct state *unused_st UNUSED,
 			connection_buf cib;
 			dbg_md(md, "instantiating "PRI_CONNECTION" for initial Main Mode message",
 			       pri_connection(c, &cib));
-			c = rw_instantiate(c, &md->sender,
-					NULL, NULL);
+			ip_address sender_address = endpoint_address(&md->sender);
+			c = rw_instantiate(c, &sender_address, NULL, NULL);
 		}
 	} else {
 		/*
@@ -642,11 +640,13 @@ stf_status main_inI1_outR1(struct state *unused_st UNUSED,
 		 */
 		if (c->kind == CK_TEMPLATE && c->spd.that.virt) {
 			dbg_md(md, "local endpoint has virt (vnet/vhost) set without wildcards - needs instantiation");
-			c = rw_instantiate(c, &md->sender, NULL, NULL);
+			ip_address sender_address = endpoint_address(&md->sender);
+			c = rw_instantiate(c, &sender_address, NULL, NULL);
 		}
 		if (c->kind == CK_TEMPLATE && c->spd.that.has_id_wildcards) {
 			dbg_md(md, "remote end has wildcard ID, needs instantiation");
-			c = rw_instantiate(c, &md->sender, NULL, NULL);
+			ip_address sender_address = endpoint_address(&md->sender);
+			c = rw_instantiate(c, &sender_address, NULL, NULL);
 		}
 	}
 
@@ -810,21 +810,21 @@ stf_status main_inR1_outI2(struct state *st, struct msg_digest *md)
 bool ikev1_justship_KE(struct logger *logger, chunk_t *g, pb_stream *outs)
 {
 	switch (impair.ke_payload) {
-	case SEND_NORMAL:
+	case IMPAIR_EMIT_NO:
 		return ikev1_out_generic_chunk(&isakmp_keyex_desc, outs, *g,
 					       "keyex value");
-	case SEND_OMIT:
+	case IMPAIR_EMIT_OMIT:
 		log_message(RC_LOG, logger, "IMPAIR: sending no KE (g^x) payload");
 		return true;
-	case SEND_EMPTY:
+	case IMPAIR_EMIT_EMPTY:
 		log_message(RC_LOG, logger, "IMPAIR: sending empty KE (g^x)");
 		return ikev1_out_generic_chunk(&isakmp_keyex_desc, outs,
 					       EMPTY_CHUNK, "empty KE");
-	case SEND_ROOF:
+	case IMPAIR_EMIT_ROOF:
 	default:
 	{
 		pb_stream z;
-		uint8_t byte = impair.ke_payload - SEND_ROOF;
+		uint8_t byte = impair.ke_payload - IMPAIR_EMIT_ROOF;
 		log_message(RC_LOG, logger, "IMPAIR: sending bogus KE (g^x) == %u value to break DH calculations", byte);
 		/* Only used to test sending/receiving bogus g^x */
 		return ikev1_out_generic(&isakmp_keyex_desc, outs, &z) &&
@@ -1399,7 +1399,7 @@ stf_status main_inR2_outI3(struct state *st, struct msg_digest *md)
 }
 
 /*
- * Processs the Main Mode ID Payload and the Authenticator
+ * Process the Main Mode ID Payload and the Authenticator
  * (Hash or Signature Payload).
  * Note: oakley_id_and_auth may switch the connection being used!
  * But only if we are a Main Mode Responder.
@@ -1818,7 +1818,7 @@ stf_status send_isakmp_notification(struct state *st,
 
 	struct v1_hash_fixup hash_fixup;
 	if (!emit_v1_HASH(V1_HASH_1, "notification",
-			  NOTIFICATION_EXCHANGE,
+			  IMPAIR_v1_NOTIFICATION_EXCHANGE,
 			  st, &hash_fixup, &rbody)) {
 		return STF_INTERNAL_ERROR;
 	}
@@ -1993,7 +1993,7 @@ static void send_notification(struct logger *logger,
 	struct v1_hash_fixup hash_fixup;
 	if (encst != NULL) {
 		if (!emit_v1_HASH(V1_HASH_1, "send notification",
-				  NOTIFICATION_EXCHANGE,
+				  IMPAIR_v1_NOTIFICATION_EXCHANGE,
 				  encst, &hash_fixup, &r_hdr_pbs)) {
 			/* return STF_INTERNAL_ERROR; */
 			return;
@@ -2115,8 +2115,7 @@ void send_notification_from_md(struct msg_digest *md, notification_t type)
 	passert(md != NULL);
 
 	update_ike_endpoints(&fake_ike, md);
-	struct logger logger = MESSAGE_LOGGER(md);
-	send_notification(&logger, &fake_ike.sa, type, NULL, 0,
+	send_notification(md->md_logger, &fake_ike.sa, type, NULL, 0,
 			  md->hdr.isa_ike_initiator_spi.bytes, md->hdr.isa_ike_responder_spi.bytes,
 			  PROTO_ISAKMP);
 }
@@ -2192,7 +2191,8 @@ void send_v1_delete(struct state *st)
 
 	/* HASH -- value to be filled later */
 	struct v1_hash_fixup hash_fixup;
-	if (!emit_v1_HASH(V1_HASH_1, "send delete", DELETE_EXCHANGE,
+	if (!emit_v1_HASH(V1_HASH_1, "send delete",
+			  IMPAIR_v1_DELETE_EXCHANGE,
 			  p1st, &hash_fixup, &r_hdr_pbs)) {
 		return /* STF_INTERNAL_ERROR */;
 	}

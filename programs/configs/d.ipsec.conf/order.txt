@@ -49,6 +49,7 @@ d.ipsec.conf/leftcert.xml
 d.ipsec.conf/leftckaid.xml
 d.ipsec.conf/leftauth.xml
 d.ipsec.conf/leftca.xml
+d.ipsec.conf/leftikeport.xml
 d.ipsec.conf/leftsendcert.xml
 d.ipsec.conf/leftxauthserver.xml
 d.ipsec.conf/leftxauthclient.xml
@@ -106,11 +107,11 @@ d.ipsec.conf/protostack.xml
 d.ipsec.conf/interfaces.xml
 d.ipsec.conf/listen.xml
 d.ipsec.conf/ike-socket.xml
-d.ipsec.conf/ikeport.xml
+d.ipsec.conf/listen-udp.xml
+d.ipsec.conf/listen-tcp.xml
 d.ipsec.conf/nflog-all.xml
 d.ipsec.conf/nat_traversal.xml
 d.ipsec.conf/force_keepalive.xml
-d.ipsec.conf/nat-ikeport.xml
 d.ipsec.conf/keep-alive.xml
 d.ipsec.conf/virtual-private.xml
 d.ipsec.conf/myvendorid.xml

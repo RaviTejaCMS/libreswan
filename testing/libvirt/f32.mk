@@ -16,16 +16,25 @@ KVM_INSTALL_RPM_LIST = 'rpm -aq > /var/tmp/rpm-qa-fedora-updates.log'
 NSS_VERSION =
 
 # The kernel packages can only be installed.  To stop a new version
-# being installed set this to empty.
+# being installed set this to empty.  XL2TPD sucks in the latest
+# kernel so is included in the list.
 
-KVM_KERNEL_VERSION ?=
-KVM_KERNEL_PACKAGES ?= \
-    kernel$(KVM_KERNEL_VERSION) \
-    kernel-core$(KVM_KERNEL_VERSION) \
-    kernel-modules$(KVM_KERNEL_VERSION) \
-    kernel-devel$(KVM_KERNEL_VERSION) \
-    kernel-headers$(KVM_KERNEL_VERSION) \
-    kernel-modules-extra$(KVM_KERNEL_VERSION)
+# KVM_KERNEL_ARCH ? = x86_64
+# KVM_KERNEL_VERSION ?= 5.8.0-0.rc1.1.fc33.$(KERNEL_ARCH).rpm
+
+#KVM_KERNEL_VERSION ?=
+#KVM_KERNEL_PACKAGES ?= \
+#    kernel$(KVM_KERNEL_VERSION) \
+#    kernel-core$(KVM_KERNEL_VERSION) \
+#    kernel-modules$(KVM_KERNEL_VERSION) \
+#    kernel-devel$(KVM_KERNEL_VERSION) \
+#    kernel-headers$(KVM_KERNEL_VERSION) \
+#    kernel-modules-extra$(KVM_KERNEL_VERSION) \
+#    xl2tpd
+
+#    kernel-debuginfo-$(RPM_KERNEL_VERSION)
+#    kernel-debuginfo-common-$(KERNEL_ARCH)-$(RPM_KERNEL_VERSION)
+
 
 # Strongswan is brokenly dependent on libgcrypt.
 #
@@ -61,6 +70,7 @@ KVM_UPGRADE_PACKAGES ?= \
     gdb \
     git \
     glibc-devel \
+    gnutls-utils \
     hping3 \
     htop \
     iftop \
@@ -101,6 +111,7 @@ KVM_UPGRADE_PACKAGES ?= \
     rpm-build \
     rsync \
     screen \
+    softhsm \
     strace \
     systemd-devel \
     tar \
@@ -113,7 +124,6 @@ KVM_UPGRADE_PACKAGES ?= \
     vim-enhanced \
     wget \
     wireshark-cli \
-    xl2tpd \
     xmlto \
     $(KVM_STRONGSWAN_PACKAGES) \
     libfaketime \
@@ -148,7 +158,7 @@ KVM_DEBUGINFO = \
     openssl-libs \
     pam \
     pcre \
-    python-libs \
+    python3-libs \
     sqlite \
     unbound-libs \
     xz-libs \

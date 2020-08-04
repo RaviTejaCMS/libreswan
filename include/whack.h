@@ -93,7 +93,7 @@ struct whack_end {
 
 	enum keyword_host host_type;
 	ip_address host_addr;
-	uint16_t host_port;	/* host order  (for IKE communications) */
+	unsigned host_ikeport;
 	ip_address host_nexthop;
 	ip_address host_srcip;
 	ip_subnet host_vtiip;
@@ -103,7 +103,6 @@ struct whack_end {
 	ip_protoport protoport;
 
 	bool has_client;
-	bool has_client_wildcard;
 
 	bool key_from_DNS_on_demand;
 	enum whack_pubkey_type pubkey_type;
@@ -354,9 +353,7 @@ struct whack_message {
 	char *redirect_to;
 	char *accept_redirect_to;
 
-	bool active_redirect;
-	ip_address active_redirect_peer;
-	ip_address active_redirect_gw;
+	char *active_redirect_dests;
 
 	/* what metric to put on ipsec routes */
 	int metric;
@@ -394,7 +391,8 @@ struct whack_message {
 #define REREAD_SECRETS	0x01		/* reread /etc/ipsec.secrets */
 #define REREAD_CRLS	0x02		/* obsoleted - just gives a warning */
 #define REREAD_FETCH	0x04		/* update CRL from distribution point(s) */
-#define REREAD_ALL	LRANGES(REREAD_SECRETS, REREAD_FETCH)	/* all reread options */
+#define REREAD_CERTS	0x08		/* update CERT(S) of connection(s) */
+#define REREAD_ALL	LRANGES(REREAD_SECRETS, REREAD_CERTS)	/* all reread options */
 
 struct whackpacker {
 	struct whack_message *msg;

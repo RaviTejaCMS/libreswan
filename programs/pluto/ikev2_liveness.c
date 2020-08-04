@@ -53,7 +53,7 @@ static stf_status send_v2_liveness_request(struct ike_sa *ike,
 	pstats_ike_dpd_sent++;
 	stf_status e = record_v2_informational_request("liveness probe informational request",
 						       ike, &ike->sa/*sender*/,
-						       NULL /* beast master */);
+						       NULL/*no payloads to emit*/);
 	if (e != STF_OK) {
 		return STF_INTERNAL_ERROR;
 	}
@@ -132,7 +132,7 @@ void liveness_check(struct state *st)
 	 * was less than .dpd_delay ago then re-schedule the probe.
 	 *
 	 * XXX: is this useful?  Liveness should be checking
-	 * round-trip but this is just looking at incomming data -
+	 * round-trip but this is just looking at incoming data -
 	 * outgoing data could lost and this traffic is all
 	 * re-transmit requests ...
 	 */

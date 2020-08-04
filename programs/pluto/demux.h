@@ -54,7 +54,7 @@ enum iface_status handle_packet_cb(const struct iface_port *ifp);
  * A message digest (struct msg_digest) holds the dissected
  * packet (and more) during a state transition.  This gets
  * a bit muddied by the way packet fragments are re-assembled
- * and the way asyncronous processing cause state transitions
+ * and the way asynchronous processing cause state transitions
  * to be suspended (eg. crypto helper work).  Think of those
  * things as being within a single state transition.
  */
@@ -79,7 +79,7 @@ struct payload_summary {
 
 /*
  * Compact enum of useful-to-pluto IKEv2 payloads.  Unlike the
- * official numbers, these are contigious.
+ * official numbers, these are contiguous.
  */
 
 enum v2_pbs {
@@ -137,6 +137,7 @@ struct msg_digest {
 	const struct state_v2_microcode *svm;	/* (v2) microcode for initial state */
 	bool new_iv_set;			/* (v1) */
 	struct state *st;			/* current state object */
+	struct logger *md_logger;		/* logger for this MD */
 
 	threadtime_t md_inception;		/* when was this started */
 
@@ -149,25 +150,6 @@ struct msg_digest {
 	bool fake_clone;			/* is this a fake (clone) message */
 	bool fake_dne;				/* created as part of fake_md() */
 
-	struct {
-		bool fragmentation_supported;
-		bool use_ppk;
-		struct payload_digest *no_ppk_auth;
-		struct payload_digest *ppk_identity;
-		bool redirected_from;
-		bool redirect_supported;
-		struct payload_digest *redirect;
-		bool nat_detection_source_ip;
-		bool nat_detection_destination_ip;
-		struct payload_digest *signature_hash_algorithms;
-		struct payload_digest *null_auth;
-		bool esp_tfc_padding_not_supported;
-		bool use_transport_mode;
-		bool mobike_supported;
-		bool initial_contact;
-		struct payload_digest *ipcomp_supported;
-	} v2N;
-
 	/*
 	 * Note that .pbs[] is indexed using either enum v1_pbs or
 	 * enum v2_pbs and not exchange type, v2_notification_t, ....
@@ -175,6 +157,18 @@ struct msg_digest {
 	 * is very very sparse.
 	 */
 	const struct pbs_in *pbs[PBS_v2_ROOF];
+
+	/*
+	 * The first IKEv2 error notification found in the payload
+	 * (error notifications are <16384), else v2N_NOTHING_WRONG
+	 * i.e., 0.
+	 *
+	 * Error notifications don't necessarially mean that things
+	 * have totally failed.  For instance, an IKE_AUTH response
+	 * can contain an error notification indicating that the CHILD
+	 * SA failed (but the IKE SA succeeded).
+	 */
+	v2_notification_t v2N_error;
 
 	/*
 	 * The packet PBS contains a message PBS and the message PBS
@@ -204,7 +198,7 @@ struct msg_digest {
 	 * than LELEM_ROOF.  This is because the next-payload
 	 * (converted to a bit map) is also stored in lset_t (lset_t
 	 * has LELEM_ROOF as its bound). Any larger value, such as
-	 * v2IKE_FRAGMENTATION, must have been droped before things
+	 * v2IKE_FRAGMENTATION, must have been dropped before things
 	 * get this far.
 	 *
 	 * XXX: While the real upper bound is closer to 53 (vs 64)
@@ -213,7 +207,7 @@ struct msg_digest {
 	 *
 	 * XXX: Even though the IKEv2 values start at 33, they are not
 	 * biased to save space.  This is because it would break the
-	 * 1:1 correspondance between the wire-value, this array, and
+	 * 1:1 correspondence between the wire-value, this array, and
 	 * the lset_t bit (at one point the lset_t values were biased,
 	 * the result was confusing custom mapping code everywhere).
 	 */
@@ -225,7 +219,9 @@ struct msg_digest {
 enum ike_version hdr_ike_version(const struct isakmp_hdr *hdr);
 enum message_role v2_msg_role(const struct msg_digest *md);
 
-extern struct msg_digest *alloc_md(const char *mdname);
+extern struct msg_digest *alloc_md(const struct iface_port *ifp,
+				   const ip_endpoint *sender,
+				   where_t where);
 struct msg_digest *md_addref(struct msg_digest *md, where_t where);
 void md_delref(struct msg_digest **mdp, where_t where);
 

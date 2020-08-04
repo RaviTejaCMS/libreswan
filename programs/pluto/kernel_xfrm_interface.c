@@ -14,8 +14,8 @@
  * for more details.
  */
 
-#if !defined(linux) || !defined(USE_XFRM_INTERFACE) || !defined(NETKEY_SUPPORT)
-# error this file should only compile on Linux when NETKEY_SUPPORT & USE_XFRM_INTERFACE are defined
+#if !defined(linux) || !defined(USE_XFRM_INTERFACE) || !defined(XFRM_SUPPORT)
+# error this file should only compile on Linux when XFRM_SUPPORT & USE_XFRM_INTERFACE are defined
 #endif
 
 #include <errno.h>
@@ -586,9 +586,10 @@ static struct pluto_xfrmi *find_pluto_xfrmi_interface(uint32_t if_id)
 	struct pluto_xfrmi *ret = NULL;
 
 	for (h = pluto_xfrm_interfaces;  h != NULL; h = h->next) {
-		if (h->if_id == if_id)
-		ret = h;
-		break;
+		if (h->if_id == if_id) {
+			ret = h;
+			break;
+		}
 	}
 
 	return ret;

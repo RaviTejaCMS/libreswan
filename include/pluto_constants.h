@@ -71,10 +71,8 @@ enum ike_version {
 #define DEFAULT_XFRM_IF_NAME "ipsec1"
 
 enum kernel_interface {
-	NO_KERNEL = 1,
-	USE_NETKEY= 2,
-	USE_BSDKAME = 3,
-	USE_WIN2K = 4,
+	USE_XFRM,
+	USE_BSDKAME,
 };
 
 /* RFC 3706 Dead Peer Detection */
@@ -319,6 +317,8 @@ typedef enum {
 	STF_SUSPEND,            /*   suspend     no       no     tbd? */
 	STF_OK,                 /*    yes        no     message? tbd? */
 	STF_INTERNAL_ERROR,     /*     no        no      never   tbd? */
+	STF_V2_DELETE_EXCHANGE_INITIATOR_IKE_SA,
+                                /*   forced    maybe     maybe  'success' */
 	STF_FATAL,		/*     no      always    never   fail */
 	STF_FAIL,       	/*     no      maybe?    maybe?  fail */
 	STF_ROOF = STF_FAIL + 65536 /* see RFC and above */
@@ -404,23 +404,6 @@ enum {
 #define DBG_ALL         (DBG_BASE | DBG_CPU_USAGE)
 
 /* singleton sets: must be kept in sync with the items! */
-
-/* so things don't break */
-#define DBG_RAW		DBG_BASE
-#define DBG_PARSING	DBG_BASE
-#define DBG_EMITTING	DBG_BASE
-#define DBG_CONTROL	DBG_BASE
-#define DBG_LIFECYCLE	DBG_BASE
-#define DBG_KERNEL	DBG_BASE
-#define DBG_DNS		DBG_BASE
-#define DBG_OPPO	DBG_BASE
-#define DBG_CONTROLMORE	DBG_BASE
-#define DBG_NATT	DBG_BASE
-#define DBG_X509	DBG_BASE
-#define DBG_DPD		DBG_BASE
-#define DBG_XAUTH	DBG_BASE
-#define DBG_RETRANSMITS	DBG_BASE
-#define DBG_OPPOINFO	DBG_BASE
 
 /* These are not part of "base" debugging */
 #define DBG_TMI		LELEM(DBG_TMI_IX)

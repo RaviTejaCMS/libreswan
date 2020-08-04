@@ -25,7 +25,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <netinet/in.h>
-#ifdef NETKEY_SUPPORT
+#ifdef XFRM_SUPPORT
 #include "linux/xfrm.h" /* local (if configured) or system copy */
 #endif
 #include "passert.h"
@@ -47,15 +47,14 @@
  */
 
 static const char *const kern_interface_name[] = {
-	"no-kernel", /* run without stack */
-	"netkey",
-	"bsdkame",
-	"win2k",
+	[USE_XFRM] = "netkey",
+	[USE_BSDKAME] = "bsdkame",
 };
+
 enum_names kern_interface_names = {
-	NO_KERNEL, USE_WIN2K,
+	USE_XFRM, USE_BSDKAME,
 	ARRAY_REF(kern_interface_name),
-	NULL, /* prefix */
+	"USE_", /* prefix */
 	NULL
 };
 
@@ -74,7 +73,7 @@ enum_names dpd_action_names = {
 	NULL
 };
 
-#ifdef NETKEY_SUPPORT
+#ifdef XFRM_SUPPORT
 /* netkey SA direction names */
 static const char *const netkey_sa_dir_name[] = {
 	"XFRM_IN",
@@ -191,6 +190,7 @@ static const char *const stf_status_strings[] = {
 	A(STF_SUSPEND),
 	A(STF_OK),
 	A(STF_INTERNAL_ERROR),
+	A(STF_V2_DELETE_EXCHANGE_INITIATOR_IKE_SA),
 	A(STF_FATAL),
 	A(STF_FAIL),
 #undef A
@@ -410,7 +410,7 @@ static const enum_names *pluto_enum_names_checklist[] = {
 	&natt_method_names,
 	&routing_story,
 	&stf_status_names,
-#ifdef NETKEY_SUPPORT
+#ifdef XFRM_SUPPORT
 	&netkey_sa_dir_names,
 #endif
 	&v1_sa_type_names,

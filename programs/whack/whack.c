@@ -9,7 +9,7 @@
  * Copyright (C) 2008-2009 David McCullough <david_mccullough@securecomputing.com>
  * Copyright (C) 2010-2019 D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2011 Mika Ilmaranta <ilmis@foobar.fi>
- * Copyright (C) 2012-2019 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2012-2020 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2012 Philippe Vouters <philippe.vouters@laposte.net>
  * Copyright (C) 2013 David McCullough <ucdevel@gmail.com>
  * Copyright (C) 2013 Matt Rogers <mrogers@redhat.com>
@@ -154,8 +154,7 @@ static void help(void)
 		"rekey: whack (--rekey-ike | --rekey-ipsec) \\\n"
 		"	--name <connection_name> [--asynchronous] \\\n"
 		"\n"
-		"active redirect: whack --redirect [--name <connection_name> | --peer-ip <ip-address>] \\\n"
-		"	--gateway <ip-address>\n"
+		"active redirect: whack [--name <connection_name>] --redirect-to <ip-address(es)> \n"
 		"\n"
 		"opportunistic initiation: whack [--tunnelipv4 | --tunnelipv6] \\\n"
 		"	--oppohere <ip-address> --oppothere <ip-address> \\\n"
@@ -305,8 +304,6 @@ enum option_enums {
 	OPT_REKEY_IPSEC,
 
 	OPT_ACTIVE_REDIRECT,
-	OPT_ACTIVE_REDIRECT_PEER,
-	OPT_ACTIVE_REDIRECT_GW,
 
 	OPT_DDOS_BUSY,
 	OPT_DDOS_UNLIMITED,
@@ -317,6 +314,7 @@ enum option_enums {
 	OPT_REREADSECRETS,
 	OPT_REREADCRLS,
 	OPT_FETCHCRLS,
+	OPT_REREADCERTS,
 	OPT_REREADALL,
 
 	OPT_PURGEOCSP,
@@ -564,9 +562,7 @@ static const struct option long_opts[] = {
 	{ "ike-socket-bufsize", required_argument, NULL, OPT_IKEBUF + OO + NUMERIC_ARG},
 	{ "ike-socket-errqueue-toggle", no_argument, NULL, OPT_IKE_MSGERR + OO },
 
-	{ "redirect", no_argument, NULL, OPT_ACTIVE_REDIRECT + OO },
-	{ "peer-ip", required_argument, NULL, OPT_ACTIVE_REDIRECT_PEER + OO },
-	{ "gateway", required_argument, NULL, OPT_ACTIVE_REDIRECT_GW + OO },
+	{ "redirect-to", required_argument, NULL, OPT_ACTIVE_REDIRECT + OO },
 
 	{ "ddos-busy", no_argument, NULL, OPT_DDOS_BUSY + OO },
 	{ "ddos-unlimited", no_argument, NULL, OPT_DDOS_UNLIMITED + OO },
@@ -576,6 +572,7 @@ static const struct option long_opts[] = {
 
 	{ "rereadsecrets", no_argument, NULL, OPT_REREADSECRETS + OO },
 	{ "rereadcrls", no_argument, NULL, OPT_REREADCRLS + OO }, /* obsolete */
+	{ "rereadcerts", no_argument, NULL, OPT_REREADCERTS + OO },
 	{ "fetchcrls", no_argument, NULL, OPT_FETCHCRLS + OO },
 	{ "rereadall", no_argument, NULL, OPT_REREADALL + OO },
 
@@ -644,6 +641,8 @@ static const struct option long_opts[] = {
 	/* options for a connection description */
 
 	{ "to", no_argument, NULL, CD_TO + OO },
+
+	/* option for cert rotation */
 
 #define PS(o, p)	{ o, no_argument, NULL, CDP_SINGLETON + POLICY_##p##_IX + OO }
 	PS("psk", PSK),
@@ -853,22 +852,6 @@ static void check_life_time(deltatime_t life, time_t raw_limit,
 	}
 }
 
-static void update_ports(struct whack_message *m)
-{
-	int port;
-
-	if (m->left.protoport.port != 0) {
-		port = htons(m->left.protoport.port);
-		setportof(port, &m->left.host_addr);
-		setportof(port, &m->left.client.addr);
-	}
-	if (m->right.protoport.port != 0) {
-		port = htons(m->right.protoport.port);
-		setportof(port, &m->right.host_addr);
-		setportof(port, &m->right.client.addr);
-	}
-}
-
 static void check_end(struct whack_end *this, struct whack_end *that,
 		      sa_family_t caf, sa_family_t taf)
 {
@@ -987,6 +970,8 @@ int main(int argc, char **argv)
 	msg.sa_replay_window = IPSEC_SA_DEFAULT_REPLAY_WINDOW;
 	msg.r_timeout = deltatime(RETRANSMIT_TIMEOUT_DEFAULT);
 	msg.r_interval = deltatime_ms(RETRANSMIT_INTERVAL_DEFAULT_MS);
+
+	msg.active_redirect_dests = NULL;
 
 	msg.addr_family = AF_INET;
 	msg.tunnel_addr_family = AF_INET;
@@ -1314,28 +1299,8 @@ int main(int argc, char **argv)
 			msg.whack_deleteuser = TRUE;
 			continue;
 
-		case OPT_ACTIVE_REDIRECT:	/* --redirect */
-			msg.active_redirect = TRUE;
-			continue;
-
-		case OPT_ACTIVE_REDIRECT_PEER:	/* --peer-ip */
-			if (!msg.active_redirect)
-				diag("missing --redirect before --peer-ip");
-			diagq(ttoaddr(optarg, 0, msg.addr_family,
-				      &msg.active_redirect_peer), optarg);
-			if (isanyaddr(&msg.active_redirect_peer)) {
-				diagq("peer address isn't valid",
-					optarg);
-			}
-			continue;
-
-		case OPT_ACTIVE_REDIRECT_GW:	/* --gateway */
-			diagq(ttoaddr(optarg, 0, msg.addr_family,
-				      &msg.active_redirect_gw), optarg);
-			if (isanyaddr(&msg.active_redirect_gw)) {
-				diagq("gateway address isn't valid",
-					optarg);
-			}
+		case OPT_ACTIVE_REDIRECT:	/* --redirect-to */
+			msg.active_redirect_dests = strdup(optarg);
 			continue;
 
 		case OPT_DDOS_BUSY:	/* --ddos-busy */
@@ -1364,6 +1329,7 @@ int main(int argc, char **argv)
 
 		case OPT_REREADSECRETS:	/* --rereadsecrets */
 		case OPT_REREADCRLS:    /* --rereadcrls */
+		case OPT_REREADCERTS:    /* --rereadcerts */
 		case OPT_FETCHCRLS:    /* --fetchcrls */
 			msg.whack_reread |= LELEM(c - OPT_REREADSECRETS);
 			continue;
@@ -1516,7 +1482,7 @@ int main(int argc, char **argv)
 					 */
 				} else {
 					/*
-					 * We asssume that we have a DNS name.
+					 * We assume that we have a DNS name.
 					 * This logic matches confread.c.
 					 * ??? it would be kind to check
 					 * the syntax.
@@ -1612,7 +1578,7 @@ int main(int argc, char **argv)
 				diagq("<port-number> must be a number between 1 and 65535",
 					optarg);
 			}
-			msg.right.host_port = opt_whole;
+			msg.right.host_ikeport = opt_whole;
 			continue;
 
 		case END_NEXTHOP:	/* --nexthop <ip-address> */
@@ -1633,14 +1599,8 @@ int main(int argc, char **argv)
 			continue;
 
 		case END_VTIIP:	/* --vtiip <ip-address/mask> */
-			if (strchr(optarg, '/') == NULL)
-				diag("vtiip needs an address/mask value");
-			diagq(ttosubnet(optarg, 0,
-					msg.tunnel_addr_family,
-					'0' /* ip/mask host bits on allowed */,
-					&msg.right.host_vtiip), optarg);
-			/* ttosubnet() sets to lowest subnet address, fixup needed */
-			diagq(tnatoaddr(optarg, strchr(optarg, '/') - optarg, AF_UNSPEC, &msg.right.host_vtiip.addr), optarg);
+			diagq(text_cidr_to_subnet(shunk1(optarg), aftoinfo(msg.tunnel_addr_family),
+						  &msg.right.host_vtiip), optarg);
 			continue;
 
 		/*
@@ -2510,7 +2470,7 @@ int main(int argc, char **argv)
 
 	if (!(msg.whack_connection || msg.whack_key ||
 	      msg.whack_delete ||msg.whack_deleteid || msg.whack_deletestate ||
-	      msg.whack_deleteuser || msg.active_redirect ||
+	      msg.whack_deleteuser || msg.active_redirect_dests != NULL ||
 	      msg.whack_initiate || msg.whack_oppo_initiate ||
 	      msg.whack_terminate ||
 	      msg.whack_route || msg.whack_unroute || msg.whack_listen ||
@@ -2524,33 +2484,10 @@ int main(int argc, char **argv)
 	      msg.whack_rekey_ike || msg.whack_rekey_ipsec))
 		diag("no action specified; try --help for hints");
 
-	/* do the logic for --redirect command */
-	if (msg.active_redirect) {
-		bool redirect_peer_spec = address_is_specified(&msg.active_redirect_peer);
-		bool redirect_gw_spec = address_is_specified(&msg.active_redirect_gw);
-		msg.active_redirect = FALSE;	/* if we pass all the 'tests' we set it back to TRUE */
-		if (msg.name != NULL)
-			if (redirect_peer_spec)
-				diag("can not use both --name <connection_name> and --peer-ip <ip_address>");
-			else if (!redirect_gw_spec)
-				diag("missing --gateway <ip-address>");
-			else
-				msg.active_redirect = TRUE;
-		else
-			if (!redirect_peer_spec)
-				diag("missing [--name <connection_name> | --peer-ip <ip_address>]");
-			else if (!redirect_gw_spec)
-				diag("missing --gateway <ip-address>");
-			else
-				msg.active_redirect = TRUE;
-	}
-
 	if (msg.policy & POLICY_AGGRESSIVE) {
 		if (msg.ike == NULL)
 			diag("cannot specify aggressive mode without ike= to set algorithm");
 	}
-
-	update_ports(&msg);
 
 	/*
 	 * Check for wild values

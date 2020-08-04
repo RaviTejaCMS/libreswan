@@ -79,7 +79,6 @@ enum keyword_numeric_config_field {
 	KBF_LOGAPPEND,
 	KBF_LOGIP,
 	KBF_AUDIT_LOG,
-	KBF_IKEPORT,
 	KBF_IKEBUF,
 	KBF_IKE_ERRQUEUE,
 	KBF_PERPEERLOG,
@@ -94,7 +93,6 @@ enum keyword_numeric_config_field {
 	KBF_OCSP_CACHE_MAX,
 	KBF_OCSP_METHOD,
 	KBF_CURLTIMEOUT,
-	KBF_NATIKEPORT,
 	KBF_SEEDBITS,
 	KBF_DROP_OPPO_NULL,
 	KBF_KEEPALIVE,
@@ -109,7 +107,8 @@ enum keyword_numeric_config_field {
 	KBF_DDOS_MODE,		/* set DDOS mode */
 	KBF_SECCOMP,		/* set SECCOMP mode */
 
-	KBF_TCPPORT,		/* TCP: global? Name matches pluto_tcpport? */
+	KBF_LISTEN_TCP,		/* listen on TCP port 4500 - default no */
+	KBF_LISTEN_UDP,		/* listen on UDP port 500/4500 - default yes */
 
 	KBF_ROOF
 };
@@ -192,7 +191,9 @@ enum keyword_numeric_conn_field {
 	KNCF_MODECONFIGCLIENT,	/* left/right */
 	KNCF_CAT,	/* left/right */
 	KNCF_SENDCERT,	/* left/right */
+	KNCF_IKEPORT,		/* left/right: IKE Port that must be used */
 	KNCF_AUTH,	/* left/right */
+
 		KNCF_last_leftright = KNCF_AUTH,
 
 	KNCF_FIREWALL,

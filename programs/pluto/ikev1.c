@@ -104,7 +104,7 @@
  *       identity isn't required.  For example, always accept the same
  *       kinds of encryption.  Accept Public Key Id authentication
  *       since the Initiator presumably has our public key and thinks
- *       we must have / can find his.  This approach is weakest
+ *       we must have / can find peers.  This approach is weakest
  *       for preshared key since the actual key must be known to
  *       decrypt the Initiator's ID Payload.
  *     These choices can be blended.  For example, a class of Identities
@@ -184,7 +184,7 @@ struct state_v1_microcode {
 	enum state_kind state, next_state;
 	lset_t flags;
 	lset_t req_payloads;    /* required payloads (allows just one) */
-	lset_t opt_payloads;    /* optional payloads (any mumber) */
+	lset_t opt_payloads;    /* optional payloads (any number) */
 	enum event_type timeout_event;
 	ikev1_state_transition_fn *processor;
 	const char *message;
@@ -219,7 +219,7 @@ void jam_v1_transition(jambuf_t *buf, const struct state_v1_microcode *transitio
  * STATE_MAIN_R3 with SMF_DS_AUTH requires P(SIG).
  *
  * In IKEv2, it is the message header and payload types that select
- * the state.  As for how the IKEv1 'from state' is slected, look for
+ * the state.  As for how the IKEv1 'from state' is selected, look for
  * a big nasty magic switch.
  *
  * XXX: the state transition table is littered with STATE_UNDEFINED /
@@ -751,7 +751,7 @@ static const struct state_v1_microcode v1_state_microcode_table[] = {
 
 void init_ikev1(void)
 {
-	DBGF(DBG_CONTROL, "checking IKEv1 state table");
+	dbg("checking IKEv1 state table");
 
 	/*
 	 * Fill in FINITE_STATES[].
@@ -841,7 +841,7 @@ void init_ikev1(void)
 		 * not-yet-taken potential future state transition and
 		 * not the previous one.
 		 *
-		 * This is just trying to extact extract them and
+		 * This is just trying to extract them and
 		 * check they are consistent.
 		 *
 		 * XXX: this is confusing
@@ -1013,6 +1013,9 @@ static stf_status informational(struct state *st, struct msg_digest *md)
 				/* ??? how do we know that tmp_name hasn't been freed? */
 				struct connection *tmp_c = conn_by_name(tmp_name, false/*!strict*/);
 
+				if (tmp_c == NULL)
+					return STF_IGNORE;
+
 				if (DBGP(DBG_BASE)) {
 					address_buf npb;
 					DBG_log("new peer address: %s",
@@ -1048,8 +1051,6 @@ static stf_status informational(struct state *st, struct msg_digest *md)
 							str_selector(&tmp_spd->that.client, &sb));
 						DBG_log("that has_client: %d",
 							tmp_spd->that.has_client);
-						DBG_log("that has_client_wildcard: %d",
-							tmp_spd->that.has_client_wildcard);
 						DBG_log("that has_port_wildcard: %d",
 							tmp_spd->that.has_port_wildcard);
 						DBG_log("that has_id_wildcards: %d",
@@ -1123,8 +1124,9 @@ static stf_status informational(struct state *st, struct msg_digest *md)
 				 * presumably the port wasn't
 				 * updated(?).
 				 */
-				tmp_c->host_pair->remote = endpoint(&new_peer,
-								    endpoint_hport(&tmp_c->host_pair->remote));
+				tmp_c->host_pair->remote = endpoint3(&ip_protocol_udp,
+								     &new_peer,
+								     endpoint_port(&tmp_c->host_pair->remote));
 
 				/* Initiating connection to the redirected peer */
 				initiate_connections_by_name(tmp_name, NULL,
@@ -1135,8 +1137,10 @@ static stf_status informational(struct state *st, struct msg_digest *md)
 			return STF_IGNORE;
 		default:
 		{
-			struct logger logger = st != NULL ? *(st->st_logger) : MESSAGE_LOGGER(md);
-			log_message(RC_LOG_SERIOUS, &logger,
+			struct logger *logger = (st != NULL ? st->st_logger :
+						 md != NULL ? md->md_logger :
+						 &failsafe_logger);
+			log_message(RC_LOG_SERIOUS, logger,
 				    "received and ignored notification payload: %s",
 				    enum_name(&ikev1_notify_names, n->isan_type));
 			return STF_IGNORE;
@@ -1145,8 +1149,10 @@ static stf_status informational(struct state *st, struct msg_digest *md)
 	} else {
 		/* warn if we didn't find any Delete or Notify payload in packet */
 		if (md->chain[ISAKMP_NEXT_D] == NULL) {
-			struct logger logger = st != NULL ? *(st->st_logger) : MESSAGE_LOGGER(md);
-			log_message(RC_LOG_SERIOUS, &logger,
+			struct logger *logger = (st != NULL ? st->st_logger :
+						 md != NULL ? md->md_logger :
+						 &failsafe_logger);
+			log_message(RC_LOG_SERIOUS, logger,
 				    "received and ignored empty informational notification payload");
 		}
 		return STF_IGNORE;
@@ -1299,7 +1305,7 @@ void process_v1_packet(struct msg_digest *md)
 
 			/*
 			 * If there is already an existing state with
-			 * this ICOOKIE, asssume it is some sort of
+			 * this ICOOKIE, assume it is some sort of
 			 * re-transmit.
 			 */
 			st = find_state_ikev1_init(&md->hdr.isa_ike_initiator_spi,
@@ -1758,13 +1764,12 @@ void process_v1_packet(struct msg_digest *md)
 				if (frag->index != ++prev_index) {
 					break; /* fragment list incomplete */
 				} else if (frag->index == last_frag_index) {
-					struct msg_digest *whole_md = alloc_md("msg_digest by ikev1 fragment handler");
+					struct msg_digest *whole_md = alloc_md(frag->md->iface,
+									       &frag->md->sender,
+									       HERE);
 					uint8_t *buffer = alloc_bytes(size,
 								       "IKE fragments buffer");
 					size_t offset = 0;
-
-					whole_md->iface = frag->md->iface;
-					whole_md->sender = frag->md->sender;
 
 					/* Reassemble fragments in buffer */
 					frag = st->st_v1_rfrags;
@@ -1814,7 +1819,7 @@ void process_v1_packet(struct msg_digest *md)
 	 * creating a CHILD_SA), .flags|=SMF_ALL_AUTH so the first
 	 * (only) one always matches.
 	 *
-	 * XXX: The code assums that when there is always a match (if
+	 * XXX: The code assumes that when there is always a match (if
 	 * there isn't the passert() triggers.  If needed, bogus
 	 * transitions that log/drop the packet are added to the
 	 * table?  Would simply dropping the packets be easier.
@@ -2174,9 +2179,10 @@ void process_packet_tail(struct msg_digest *md)
 			case ISAKMP_NEXT_ID:
 			case ISAKMP_NEXT_NATOA_RFC:
 				/* dump ID section */
-				DBG(DBG_PARSING,
-				    DBG_dump("     obj: ", pd->pbs.cur,
-					     pbs_left(&pd->pbs)));
+				if (DBGP(DBG_BASE)) {
+					DBG_dump("     obj: ", pd->pbs.cur,
+						 pbs_left(&pd->pbs));
+				}
 				break;
 			default:
 				break;
@@ -2526,7 +2532,7 @@ void complete_v1_state_transition(struct msg_digest *md, stf_status result)
 
 		if (md->fragvid) {
 			dbg("peer supports fragmentation");
-			st->st_seen_fragvid = TRUE;
+			st->st_seen_fragmentation_supported = TRUE;
 		}
 
 		if (md->dpd) {
@@ -2645,7 +2651,7 @@ void complete_v1_state_transition(struct msg_digest *md, stf_status result)
 
 			if (st->st_state->kind == STATE_MAIN_R2 &&
 				impair.send_no_main_r2) {
-				/* record-only so we propely emulate packet drop */
+				/* record-only so we properly emulate packet drop */
 				record_outbound_v1_ike_msg(st, &reply_stream,
 							   finite_states[from_state]->name);
 				log_state(RC_LOG, st, "IMPAIR: Skipped sending STATE_MAIN_R2 response packet");
@@ -3053,17 +3059,17 @@ bool ikev1_decode_peer_id(struct msg_digest *md, bool initiator, bool aggrmode)
 	if (st->hidden_variables.st_nat_traversal != LEMPTY &&
 	    id->isaid_doi_specific_a == IPPROTO_UDP &&
 	    (id->isaid_doi_specific_b == 0 ||
-	     id->isaid_doi_specific_b == pluto_nat_port)) {
+	     id->isaid_doi_specific_b == NAT_IKE_UDP_PORT)) {
 		dbg("protocol/port in Phase 1 ID Payload is %d/%d. accepted with port_floating NAT-T",
 		    id->isaid_doi_specific_a, id->isaid_doi_specific_b);
 	} else if (!(id->isaid_doi_specific_a == 0 &&
 		     id->isaid_doi_specific_b == 0) &&
 		   !(id->isaid_doi_specific_a == IPPROTO_UDP &&
-		     id->isaid_doi_specific_b == pluto_port))
+		     id->isaid_doi_specific_b == IKE_UDP_PORT))
 	{
 		log_state(RC_LOG_SERIOUS, st,
 			  "protocol/port in Phase 1 ID Payload MUST be 0/0 or %d/%d but are %d/%d (attempting to continue)",
-			  IPPROTO_UDP, pluto_port,
+			  IPPROTO_UDP, IKE_UDP_PORT,
 			  id->isaid_doi_specific_a,
 			  id->isaid_doi_specific_b);
 		/*
@@ -3279,3 +3285,28 @@ void doi_log_cert_thinking(uint16_t auth,
 			DBG_log("Sending one or more authcerts");
 	}
 }
+/*
+ * Reply messages are built in this nasty evil global buffer.
+ *
+ * Only one packet can be built at a time.  That should be ok as
+ * packets are only built on the main thread and code and a packet is
+ * created using a single operation.
+ *
+ * In the good old days code would partially construct a packet,
+ * wonder off to do crypto and process other packets, and then assume
+ * things could be picked up where they were left off.  Code to make
+ * that work (saving restoring the buffer, re-initializing the buffer
+ * in strange places, ....) has all been removed.
+ *
+ * Something else that should go is global access to REPLY_STREAM.
+ * Instead all code should use open_reply_stream() and a reference
+ * with only local scope.  This should reduce the odds of code
+ * meddling in reply_stream on the sly.
+ *
+ * Another possibility is to move the buffer onto the stack.  However,
+ * the PBS is 64K and that isn't so good for small machines.  Then
+ * again the send.[hc] and demux[hc] code both allocate 64K stack
+ * buffers already.  Oops.
+ */
+
+pb_stream reply_stream;

@@ -98,10 +98,10 @@ struct_desc isakmp_hdr_desc = {
 static field_desc raw_isa_fields[] = {
 	{ ft_raw, IKE_SA_SPI_SIZE, "initiator SPI", NULL },
 	{ ft_raw, IKE_SA_SPI_SIZE, "responder SPI", NULL },
-	{ ft_nat, 8 / BITS_PER_BYTE, "next payload type", },
-	{ ft_nat, 8 / BITS_PER_BYTE, "ISAKMP version", },
-	{ ft_nat, 8 / BITS_PER_BYTE, "exchange type", },
-	{ ft_nat, 8 / BITS_PER_BYTE, "flags", },
+	{ ft_nat, 8 / BITS_PER_BYTE, "next payload type", NULL, },
+	{ ft_nat, 8 / BITS_PER_BYTE, "ISAKMP version", NULL, },
+	{ ft_nat, 8 / BITS_PER_BYTE, "exchange type", NULL, },
+	{ ft_nat, 8 / BITS_PER_BYTE, "flags", NULL, },
 	{ ft_nat, 32 / BITS_PER_BYTE, "Message ID", NULL },
 	{ ft_nat, 32 / BITS_PER_BYTE, "length", NULL },
 	{ ft_end, 0, NULL, NULL }
@@ -453,7 +453,7 @@ static field_desc isaiid_fields[] = {
 	{ ft_zig, 8 / BITS_PER_BYTE, "reserved", NULL },
 	{ ft_len, 16 / BITS_PER_BYTE, "length", NULL },
 	{ ft_enum, 8 / BITS_PER_BYTE, "ID type", &ike_idtype_names },
-	{ ft_nat, 8 / BITS_PER_BYTE, "Protocol ID", NULL }, /* ??? UDP/TCP or 0? */
+	{ ft_loose_enum, 8 / BITS_PER_BYTE, "Protocol ID", &ip_protocol_id_names, },
 	{ ft_nat, 16 / BITS_PER_BYTE, "port", NULL },
 	{ ft_end, 0, NULL, NULL }
 };
@@ -718,8 +718,9 @@ static field_desc isaattr_fields[] = {
 	{ ft_end, 0, NULL, NULL }
 };
 
-/* MODECFG */
-/* From draft-dukes-ike-mode-cfg
+/*
+ * MODECFG
+ * From draft-dukes-ike-mode-cfg
  * 3.2. Attribute Payload
  *                         1                   2                   3
  *     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
@@ -742,8 +743,9 @@ struct_desc isakmp_attr_desc = {
 	.pt = ISAKMP_NEXT_MCFG_ATTR,
 };
 
-/* ISAKMP NAT-Traversal NAT-D
- * layout from draft-ietf-ipsec-nat-t-ike-01.txt section 3.2
+/*
+ * ISAKMP NAT-Traversal NAT-D
+ * RFC 3947 https://tools.ietf.org/html/rfc3947
  *
  *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
  * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -766,14 +768,15 @@ struct_desc isakmp_nat_d_drafts = {
 	.pt = ISAKMP_NEXT_NATD_DRAFTS,
 };
 
-/* ISAKMP NAT-Traversal NAT-OA
- * layout from draft-ietf-ipsec-nat-t-ike-01.txt section 4.2
+/*
+ * ISAKMP NAT-Traversal NAT-OA
+ * RFC 3947 https://tools.ietf.org/html/rfc3947
  *
  *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
  * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
  * ! Next Payload  !   RESERVED    !         Payload Length        !
  * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- * !   ID Type     !   RESERVED    !            RESERVED           !
+ * !   ID Type     !                   RESERVED                    !
  * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
  * !         IPv4 (4 octets) or IPv6 address (16 octets)           !
  * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -917,7 +920,7 @@ static field_desc ikev2prop_fields[] = {
 	{ ft_zig,  8 / BITS_PER_BYTE, "reserved", NULL },
 	{ ft_len, 16 / BITS_PER_BYTE, "length", NULL },
 	{ ft_nat,  8 / BITS_PER_BYTE, "prop #", NULL },
-	{ ft_enum, 8 / BITS_PER_BYTE, "proto ID", &ikev2_sec_proto_id_names },
+	{ ft_enum, 8 / BITS_PER_BYTE, "proto ID", &ikev2_proposal_protocol_id_names },
 	{ ft_nat,  8 / BITS_PER_BYTE, "spi size", NULL },
 	{ ft_nat,  8 / BITS_PER_BYTE, "# transforms", NULL },
 	{ ft_end,  0, NULL, NULL }
@@ -951,7 +954,7 @@ static field_desc ikev2trans_fields[] = {
 	{ ft_lss, 8 / BITS_PER_BYTE, "last transform", &ikev2_last_transform_desc },
 	{ ft_zig,  8 / BITS_PER_BYTE, "reserved", NULL },
 	{ ft_len, 16 / BITS_PER_BYTE, "length", NULL },
-	{ ft_enum, 8 / BITS_PER_BYTE, "IKEv2 transform type", &ikev2_trans_type_names },
+	{ ft_loose_enum, 8 / BITS_PER_BYTE, "IKEv2 transform type", &ikev2_trans_type_names },
 	{ ft_zig,  8 / BITS_PER_BYTE, "reserved", NULL },
 	{ ft_loose_enum_enum, 16 / BITS_PER_BYTE, "IKEv2 transform ID", &v2_transform_ID_enums }, /* select enum based on transform type */
 	{ ft_end,  0, NULL, NULL }
@@ -1048,7 +1051,7 @@ struct_desc ikev2_ke_desc = {
  *    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
  *    ! Next Payload  !C!  RESERVED   !         Payload Length        !
  *    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- *    !   ID Type     !                 RESERVED                      |
+ *    !   ID Type     !                "RESERVED"                     |
  *    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
  *    !                                                               !
  *    ~                   Identification Data                         ~
@@ -1056,6 +1059,10 @@ struct_desc ikev2_ke_desc = {
  *    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
  *
  *             Figure 11:  Identification Payload Format
+ *
+ * Because the ID payload's RESERVED field is included in the AUTH
+ * hash calculation it isn't really reserved (aka send zero, ignore on
+ * input).  Hence it is flagged as ft_raw and not ft_zig.
  */
 
 static field_desc ikev2id_fields[] = {
@@ -1063,7 +1070,7 @@ static field_desc ikev2id_fields[] = {
 	{ ft_set, 8 / BITS_PER_BYTE, "flags", critical_names },
 	{ ft_len, 16 / BITS_PER_BYTE, "length", NULL },
 	{ ft_enum, 8 / BITS_PER_BYTE, "ID type", &ikev2_idtype_names },
-	{ ft_zig, 24 / BITS_PER_BYTE, "reserved", NULL },
+	{ ft_raw, 24 / BITS_PER_BYTE, "reserved", NULL },
 	{ ft_end,  0, NULL, NULL },
 };
 
@@ -1289,7 +1296,7 @@ static field_desc ikev2_notify_fields[] = {
 	{ ft_pnpc, 8 / BITS_PER_BYTE, "next payload type", &ikev2_payload_names },
 	{ ft_set, 8 / BITS_PER_BYTE, "flags", critical_names },
 	{ ft_len, 16 / BITS_PER_BYTE, "length", NULL },
-	{ ft_enum, 8 / BITS_PER_BYTE, "Protocol ID", &ikev2_protocol_names },
+	{ ft_enum, 8 / BITS_PER_BYTE, "Protocol ID", &ikev2_notify_protocol_id_names },
 	/* names used are v1 names may be we should use 4306 3.3.1 names */
 	{ ft_nat,  8 / BITS_PER_BYTE, "SPI size", NULL },
 	{ ft_loose_enum, 16 / BITS_PER_BYTE, "Notify Message Type",
@@ -1325,7 +1332,7 @@ static field_desc ikev2_delete_fields[] = {
 	{ ft_pnpc, 8 / BITS_PER_BYTE, "next payload type", &ikev2_payload_names },
 	{ ft_set, 8 / BITS_PER_BYTE, "flags", critical_names },
 	{ ft_len, 16 / BITS_PER_BYTE, "length", NULL },
-	{ ft_enum, 8 / BITS_PER_BYTE, "protocol ID", &ikev2_del_protocol_names },
+	{ ft_enum, 8 / BITS_PER_BYTE, "protocol ID", &ikev2_delete_protocol_id_names },
 	{ ft_nat, 8 / BITS_PER_BYTE, "SPI size", NULL },
 	{ ft_nat, 16 / BITS_PER_BYTE, "number of SPIs", NULL },
 	{ ft_end, 0, NULL, NULL }
@@ -1426,7 +1433,7 @@ struct_desc ikev2_ts_r_desc = {
  */
 static field_desc ikev2ts1_fields[] = {
 	{ ft_enum, 8 / BITS_PER_BYTE, "TS type", &ikev2_ts_type_names },
-	{ ft_nat,  8 / BITS_PER_BYTE, "IP Protocol ID", NULL },
+	{ ft_loose_enum,  8 / BITS_PER_BYTE, "IP Protocol ID", &ip_protocol_id_names, },
 	{ ft_len, 16 / BITS_PER_BYTE, "length", NULL },
 	{ ft_nat, 16 / BITS_PER_BYTE, "start port", NULL },
 	{ ft_nat, 16 / BITS_PER_BYTE, "end port", NULL },
@@ -1702,11 +1709,13 @@ void init_out_pbs(pb_stream *pbs, uint8_t *start, size_t len, const char *name)
 	memset(start, 0xFA, len);	/* value likely to be unpleasant */
 }
 
-pb_stream open_out_pbs(const char *name, uint8_t *buffer, size_t sizeof_buffer)
+struct pbs_out open_pbs_out(const char *name, uint8_t *buffer, size_t sizeof_buffer,
+			    struct logger *logger)
 {
-	pb_stream out_pbs;
+	struct pbs_out out_pbs;
 	init_out_pbs(&out_pbs, buffer, sizeof_buffer, name);
-	dbg("Opening output PBS %s", name);
+	out_pbs.out_logger = logger;
+	dbg("opening output PBS %s", name);
 	return out_pbs;
 }
 
@@ -1741,22 +1750,6 @@ shunk_t pbs_in_left_as_shunk(const pb_stream *pbs)
 	return shunk2(pbs->cur, pbs_left(pbs));
 }
 
-static err_t enum_enum_checker(
-	const char *struct_name,
-	const field_desc *fp,
-	uint32_t last_enum)
-{
-	enum_names *ed = enum_enum_table(fp->desc, last_enum);
-
-	if (ed == NULL) {
-		return builddiag("%s of %s has an unknown type: %" PRIu32 " (0x%" PRIx32 ")",
-				 fp->name, struct_name,
-				 last_enum,
-				 last_enum);
-	}
-	return NULL;
-}
-
 /*
  * print a natural number using the specified FMT, with the value in
  * network-byte-order appended.
@@ -1769,7 +1762,7 @@ static void DBG_print_nat(const field_desc *fp, uintmax_t nat)
 		jam(buf, " (");
 		/*
 		 * Note that a single byte value such as "(23)" is
-		 * ambigious.  Since it is prefixed by the equivalent
+		 * ambiguous.  Since it is prefixed by the equivalent
 		 * decimal it should be clear.
 		 *
 		 * XXX: the same conversion code appears in
@@ -1895,10 +1888,9 @@ static void DBG_print_struct(const char *label, const void *struct_ptr,
 								   last_enum,
 								   n, &buf);
 				DBG_log("   %s: %s (0x%jx)",
-					fp->name,
-					name, n);
-			}
+					fp->name, name, n);
 				break;
+			}
 
 			case ft_set: /* bits representing set */
 				DBG_log("   %s: %s (0x%jx)",
@@ -2013,12 +2005,11 @@ bool pbs_in_struct(struct pbs_in *ins,
 				uint8_t byte = *cur;
 				if (byte != 0) {
 					/* We cannot zeroize it, it would break our hash calculation. */
-					log_message(RC_LOG, logger,
-						    "byte at offset %td (%td) of '%s'.'%s' is 0x%02"PRIx8" but should have been zero (ignored)",
-						    (cur - ins->cur),
-						    (cur - ins->start),
-						    sd->name, fp->name,
-						    byte);
+					dbg("byte at offset %td (%td) of '%s'.'%s' is 0x%02"PRIx8" but should have been zero (ignored)",
+					    (cur - ins->cur),
+					    (cur - ins->start),
+					    sd->name, fp->name,
+					    byte);
 				}
 				cur++;
 				*outp++ = '\0'; /* probably redundant */
@@ -2115,16 +2106,8 @@ bool pbs_in_struct(struct pbs_in *ins,
 				last_enum = n;
 				break;
 
-			case ft_loose_enum_enum:
-			{
-				/* value from an enumeration with partial name table based on previous enum */
-				err_t ugh = enum_enum_checker(sd->name, fp, last_enum);
-				if (ugh != NULL) {
-					log_message(RC_LOG, logger, "%s", ugh);
-					return false;
-				}
+			case ft_loose_enum_enum:	/* value from an enumeration with partial name table based on previous enum */
 				break;
-			}
 
 			case ft_set:            /* bits representing set */
 				if (!testset(fp->desc, n)) {
@@ -2197,30 +2180,39 @@ bool in_struct(void *struct_ptr, struct_desc *sd,
 			     obj_pbs, &logger);
 }
 
-bool in_raw(void *bytes, size_t len, pb_stream *ins, const char *name)
+bool pbs_in_raw(struct pbs_in *ins, void *bytes, size_t len,
+		const char *name, struct logger *logger)
 {
 	if (pbs_left(ins) < len) {
 		/* XXX: needs current logger embedded in pbs_in? */
-		loglog(RC_LOG_SERIOUS,
-		       "not enough bytes left to get %s from %s",
-		       name, ins->name);
-		return FALSE;
+		log_message(RC_LOG_SERIOUS, logger,
+			    "not enough bytes left to get %s from %s",
+			    name, ins->name);
+		return false;
 	} else {
 		if (bytes == NULL) {
-			DBG(DBG_PARSING,
-			    DBG_log("skipping %u raw bytes of %s (%s)",
-				    (unsigned) len, ins->name, name);
-			    DBG_dump(name, ins->cur, len));
+			if (DBGP(DBG_BASE)) {
+				DBG_log("skipping %u raw bytes of %s (%s)",
+					(unsigned) len, ins->name, name);
+				DBG_dump(name, ins->cur, len);
+			}
 		} else {
 			memcpy(bytes, ins->cur, len);
-			DBG(DBG_PARSING,
-			    DBG_log("parsing %u raw bytes of %s into %s",
-				    (unsigned) len, ins->name, name);
-			    DBG_dump(name, bytes, len));
+			if (DBGP(DBG_BASE)) {
+				DBG_log("parsing %u raw bytes of %s into %s",
+					(unsigned) len, ins->name, name);
+				DBG_dump(name, bytes, len);
+			}
 		}
 		ins->cur += len;
 		return TRUE;
 	}
+}
+
+bool in_raw(void *bytes, size_t len, struct pbs_in *ins, const char *name)
+{
+	struct logger logger = cur_logger();
+	return pbs_in_raw(ins, bytes, len, name, &logger);
 }
 
 /*
@@ -2339,7 +2331,7 @@ static void update_next_payload_chain(pb_stream *outs,
 	 * this is stored in the outermost PBS.
 	 *
 	 * XXX: don't try to be all fancy and copy back values; could
-	 * use an outs->message pointer; but since nesting is minimial
+	 * use an outs->message pointer; but since nesting is minimal
 	 * this isn't really urgent
 	 */
 	pb_stream *message = outs->container;
@@ -2414,16 +2406,19 @@ static void update_next_payload_chain(pb_stream *outs,
  * This routine returns TRUE iff it succeeds.
  */
 
-bool out_struct(const void *struct_ptr, struct_desc *sd,
-		pb_stream *outs, pb_stream *obj_pbs)
+bool pbs_out_struct(struct pbs_out *outs,
+		    const void *struct_ptr, size_t struct_size, struct_desc *sd,
+		    struct pbs_out *obj_pbs)
 {
 	err_t ugh = NULL;
 	const u_int8_t *inp = struct_ptr;
 	u_int8_t *cur = outs->cur;
 
-	DBG(DBG_EMITTING,
-	    DBG_prefix_print_struct(outs, "emit ", struct_ptr, sd,
-				    obj_pbs == NULL));
+	passert(struct_size == 0 || struct_size >= sd->size);
+
+	if (DBGP(DBG_BASE)) {
+		DBG_prefix_print_struct(outs, "emit ", struct_ptr, sd, obj_pbs == NULL);
+	}
 
 	if (outs->roof - cur < (ptrdiff_t)sd->size) {
 		ugh = builddiag(
@@ -2434,10 +2429,11 @@ bool out_struct(const void *struct_ptr, struct_desc *sd,
 		uint32_t last_enum = 0;
 
 		/* new child stream for portion of payload after this struct */
-		pb_stream obj = {
+		struct pbs_out obj = {
 			.container = outs,
 			.desc = sd,
 			.name = sd->name,
+			.out_logger = outs->out_logger,
 
 			/* until a length field is discovered */
 			/* .lenfld = NULL, */
@@ -2469,10 +2465,19 @@ bool out_struct(const void *struct_ptr, struct_desc *sd,
 #endif
 			switch (fp->field_type) {
 			case ft_zig: /* zero */
-				memset(cur, 0, i);
+			{
+				uint8_t byte;
+				if (impair.send_nonzero_reserved) {
+					byte = ISAKMP_PAYLOAD_LIBRESWAN_BOGUS;
+					log_pbs_out(RC_LOG, outs, "IMPAIR: setting zero/ignore field to 0x%02x", byte);
+				} else {
+					byte = 0;
+				}
+				memset(cur, byte, i);
 				inp += i;
 				cur += i;
 				break;
+			}
 
 			case ft_mnpc:
 				start_next_payload_chain(outs, sd, fp,
@@ -2557,7 +2562,7 @@ bool out_struct(const void *struct_ptr, struct_desc *sd,
 								n & ISAKMP_ATTR_AF_MASK,
 								last_enum, n);
 						if (impair.emitting) {
-							libreswan_log("IMPAIR: emitting %s", ugh);
+							log_pbs_out(RC_LOG, outs, "IMPAIR: emitting %s", ugh);
 							ugh = NULL;
 						}
 					}
@@ -2570,13 +2575,14 @@ bool out_struct(const void *struct_ptr, struct_desc *sd,
 								n,
 								n);
 					}
-				/* FALL THROUGH */
+					last_enum = n;
+					break;
+
 				case ft_loose_enum:     /* value from an enumeration with only some names known */
 					last_enum = n;
 					break;
 
 				case ft_loose_enum_enum:	/* value from an enumeration with partial name table based on previous enum */
-					ugh = enum_enum_checker(sd->name, fp, last_enum);
 					break;
 
 				case ft_set:            /* bits representing set */
@@ -2635,7 +2641,7 @@ bool out_struct(const void *struct_ptr, struct_desc *sd,
 	}
 
 	/* some failure got us here: report it */
-	loglog(RC_LOG_SERIOUS, "%s", ugh); /* ??? serious, but errno not relevant */
+	log_pbs_out(RC_LOG_SERIOUS, outs, "%s", ugh); /* ??? serious, but errno not relevant */
 	return FALSE;
 }
 
@@ -2690,7 +2696,7 @@ static bool space_for(size_t len, pb_stream *outs, const char *fmt, ...)
 		outs->cur += pbs_left(outs);
 		return false;
 	} else {
-		LSWDBGP(DBG_EMITTING, buf) {
+		LSWDBGP(DBG_BASE, buf) {
 			lswlogs(buf, "emitting ");
 			va_list ap;
 			va_start(ap, fmt);
@@ -2746,18 +2752,6 @@ bool out_zero(size_t len, pb_stream *outs, const char *name)
 	}
 }
 
-pb_stream open_output_struct_pbs(pb_stream *outs, const void *struct_ptr,
-				 struct_desc *sd)
-{
-	pb_stream obj_pbs;
-	if (out_struct(struct_ptr, sd, outs, &obj_pbs)) {
-		return obj_pbs;
-	} else {
-		return empty_pbs;
-	}
-}
-
-
 /*
  * Reply messages are built in this nasty evil global buffer.
  *
@@ -2782,7 +2776,6 @@ pb_stream open_output_struct_pbs(pb_stream *outs, const void *struct_ptr,
  * buffers already.  Oops.
  */
 
-pb_stream reply_stream;
 uint8_t reply_buffer[MAX_OUTPUT_UDP_SIZE];
 
 /*
@@ -2792,7 +2785,7 @@ uint8_t reply_buffer[MAX_OUTPUT_UDP_SIZE];
  * the last call's setting of the length wins.
  */
 
-void close_output_pbs(pb_stream *pbs)
+void close_output_pbs(struct pbs_out *pbs)
 {
 	if (pbs->lenfld != NULL) {
 		uint32_t len = pbs_offset(pbs);
@@ -2803,8 +2796,7 @@ void close_output_pbs(pb_stream *pbs)
 		if (pbs->lenfld_desc->field_type == ft_lv)
 			len -= sizeof(struct isakmp_attribute);
 
-		DBG(DBG_EMITTING, DBG_log("emitting length of %s: %" PRIu32,
-					  pbs->name, len));
+		dbg("emitting length of %s: %" PRIu32, pbs->name, len);
 
 		/* emit octets of length in network order */
 		while (i-- != 0) {
@@ -2818,6 +2810,8 @@ void close_output_pbs(pb_stream *pbs)
 
 	if (pbs->container != NULL)
 		pbs->container->cur = pbs->cur; /* pass space utilization up */
+	/* don't log against a closed pbs */
+	pbs->out_logger = NULL;
 }
 
 bool pbs_in_address(ip_address *address, const struct ip_info *ipv,
@@ -2853,4 +2847,15 @@ bool pbs_out_address(const ip_address *address, struct pbs_out *out_pbs, const c
 {
 	shunk_t as = address_as_shunk(address);
 	return out_raw(as.ptr, as.len, out_pbs, what);
+}
+
+void log_pbs_out(lset_t rc_flags, struct pbs_out *outs, const char *message, ...)
+{
+	va_list ap;
+	va_start(ap, message);
+	struct logger logger = (pexpect(outs != NULL) && outs->out_logger != NULL
+				? *outs->out_logger
+				: cur_logger());
+	log_va_list(rc_flags, &logger, message, ap);
+	va_end(ap);
 }

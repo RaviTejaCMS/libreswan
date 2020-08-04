@@ -20,8 +20,6 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#include "libreswan/pfkeyv2.h"
-
 #include "sysdep.h"
 #include "constants.h"
 #include "lswlog.h"
@@ -110,8 +108,7 @@ struct db_sa *oakley_alg_makedb(const struct ike_proposals ike_proposals,
 	 */
 
 	if (ike_proposals.p == NULL) {
-		DBG(DBG_CONTROL, DBG_log(
-			    "no specific IKE algorithms specified - using defaults"));
+		dbg("no specific IKE algorithms specified - using defaults");
 		struct ike_proposals default_info = ikev1_default_ike_info();
 		struct db_sa *new_db = oakley_alg_mergedb(default_info,
 							  auth_method,
@@ -158,12 +155,11 @@ struct db_sa *oakley_alg_mergedb(struct ike_proposals ike_proposals,
 		unsigned modp = algs.dh->group;
 		unsigned eklen = algs.enckeylen;
 
-		DBG(DBG_CONTROL,
-		    DBG_log("oakley_alg_makedb() processing ealg=%s=%u halg=%s=%u modp=%s=%u eklen=%u",
-			    algs.encrypt->common.fqn, ealg,
-			    algs.prf->common.fqn, halg,
-			    algs.dh->common.fqn, modp,
-			    eklen));
+		dbg("oakley_alg_makedb() processing ealg=%s=%u halg=%s=%u modp=%s=%u eklen=%u",
+		    algs.encrypt->common.fqn, ealg,
+		    algs.prf->common.fqn, halg,
+		    algs.dh->common.fqn, modp,
+		    eklen);
 
 		const struct encrypt_desc *enc_desc = algs.encrypt;
 		if (eklen != 0 && !encrypt_has_key_bit_length(enc_desc, eklen)) {
@@ -380,7 +376,6 @@ struct db_sa *oakley_alg_mergedb(struct ike_proposals ike_proposals,
 	if (gsp != NULL)
 		gsp->parentSA = TRUE;
 
-	DBG(DBG_CONTROL,
-	    DBG_log("oakley_alg_makedb() returning %p", gsp));
+	dbg("oakley_alg_makedb() returning %p", gsp);
 	return gsp;
 }

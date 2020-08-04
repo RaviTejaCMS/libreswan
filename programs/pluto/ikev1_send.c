@@ -52,11 +52,14 @@ static bool send_v1_frags(struct state *st, const char *where)
 {
 	unsigned int fragnum = 0;
 
-	/* Each fragment, if we are doing NATT, needs a non-ESP_Marker prefix.
-	 * natt_bonus is the size of the addition (0 if not needed).
+	/*
+	 * If we are doing NATT, so that the other end doesn't mistake
+	 * this message for ESP, each fragment needs a non-ESP_Marker
+	 * prefix.  natt_bonus is the size of the addition (0 if not
+	 * needed).
 	 */
 	const size_t natt_bonus =
-		st->st_interface->ike_float ? NON_ESP_MARKER_SIZE : 0;
+		st->st_interface->esp_encapsulation_enabled ? NON_ESP_MARKER_SIZE : 0;
 
 	/* We limit fragment packets to ISAKMP_FRAG_MAXLEN octets.
 	 * max_data_len is the maximum data length that will fit within it.
@@ -121,11 +124,10 @@ static bool send_v1_frags(struct state *st, const char *where)
 			fh->isafrag_flags = packet_remainder_len == data_len ?
 					    ISAKMP_FRAG_LAST : 0;
 		}
-		DBG(DBG_CONTROL,
-		    DBG_log("sending IKE fragment id '%d', number '%u'%s",
-			    1, /* hard coded for now, seems to be what all the cool implementations do */
-			    fragnum,
-			    packet_remainder_len == data_len ? " (last)" : ""));
+		dbg("sending IKE fragment id '%d', number '%u'%s",
+		    1, /* hard coded for now, seems to be what all the cool implementations do */
+		    fragnum,
+		    packet_remainder_len == data_len ? " (last)" : "");
 
 		if (!send_chunks_using_state(st, where,
 					     chunk2(frag_prefix,
@@ -141,19 +143,25 @@ static bool send_v1_frags(struct state *st, const char *where)
 
 static bool should_fragment_v1_ike_msg(struct state *st, size_t len, bool resending)
 {
-	if (st->st_interface != NULL && st->st_interface->ike_float)
+	/*
+	 * If we are doing NATT, so that the other end doesn't mistake
+	 * this message for ESP, each fragment needs a non-ESP_Marker
+	 * prefix.  natt_bonus is the size of the addition (0 if not
+	 * needed).
+	 */
+	if (st->st_interface != NULL && st->st_interface->esp_encapsulation_enabled)
 		len += NON_ESP_MARKER_SIZE;
 
 	/* This condition is complex.  Formatting is meant to help reader.
 	 *
-	 * Hugh thinks his banished style would make this earlier version
+	 * Hugh thinks peers banished style would make this earlier version
 	 * a little clearer:
 	 * len + natt_bonus
 	 *    >= (st->st_connection->addr_family == AF_INET
 	 *       ? ISAKMP_FRAG_MAXLEN_IPv4 : ISAKMP_FRAG_MAXLEN_IPv6)
 	 * && ((  resending
 	 *        && (st->st_connection->policy & POLICY_IKE_FRAG_ALLOW)
-	 *        && st->st_seen_fragvid)
+	 *        && st->st_seen_fragmentation_supported)
 	 *     || (st->st_connection->policy & POLICY_IKE_FRAG_FORCE)
 	 *     || st->st_seen_fragments))
 	 *
@@ -162,7 +170,7 @@ static bool should_fragment_v1_ike_msg(struct state *st, size_t len, bool resend
 	return len >= endpoint_type(&st->st_remote_endpoint)->ikev1_max_fragment_size &&
 	    (   (resending &&
 			(st->st_connection->policy & POLICY_IKE_FRAG_ALLOW) &&
-			st->st_seen_fragvid) ||
+			st->st_seen_fragmentation_supported) ||
 		(st->st_connection->policy & POLICY_IKE_FRAG_FORCE) ||
 		st->st_seen_fragments   );
 }
@@ -182,11 +190,12 @@ static bool send_or_resend_v1_ike_msg_from_state(struct state *st,
 	}
 
 	/*
-	 * Each fragment, if we are doing NATT, needs a non-ESP_Marker
+	 * If we are doing NATT, so that the other end doesn't mistake
+	 * this message for ESP, each fragment needs a non-ESP_Marker
 	 * prefix.  natt_bonus is the size of the addition (0 if not
 	 * needed).
 	 */
-	size_t natt_bonus = st->st_interface->ike_float ? NON_ESP_MARKER_SIZE : 0;
+	size_t natt_bonus = st->st_interface->esp_encapsulation_enabled ? NON_ESP_MARKER_SIZE : 0;
 	size_t len = st->st_v1_tpacket.len;
 
 	passert(len != 0);
@@ -197,7 +206,7 @@ static bool send_or_resend_v1_ike_msg_from_state(struct state *st,
 	 * fragment.
 	 *
 	 * ??? why can't we fragment in STATE_MAIN_I1?  XXX: something
-	 * to do with the attacks inital packet?
+	 * to do with the attacks initial packet?
 	 */
 	if (st->st_state->kind != STATE_MAIN_I1 &&
 	    should_fragment_v1_ike_msg(st, len + natt_bonus, resending)) {

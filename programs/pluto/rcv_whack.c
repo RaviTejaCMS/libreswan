@@ -8,7 +8,7 @@
  * Copyright (C) 2010 David McCullough <david_mccullough@securecomputing.com>
  * Copyright (C) 2011 Mika Ilmaranta <ilmis@foobar.fi>
  * Copyright (C) 2012-2013 Paul Wouters <paul@libreswan.org>
- * Copyright (C) 2014-2019 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2014-2020 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2014-2017 Antony Antony <antony@phenome.org>
  * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
@@ -36,8 +36,6 @@
 #include <resolv.h>
 #include <fcntl.h>
 #include <unistd.h>		/* for gethostname() */
-
-#include "libreswan/pfkeyv2.h"
 
 #include <event2/event.h>
 #include <event2/event_struct.h>
@@ -93,6 +91,9 @@
 #include "pluto_stats.h"
 #include "state_db.h"
 
+#include "nss_cert_reread.h"
+#include "send.h"			/* for impair: send_keepalive() */
+
 static struct state *find_impaired_state(unsigned biased_what, struct fd *whackfd)
 {
 	if (biased_what == 0) {
@@ -127,7 +128,7 @@ static void whack_impair_action(enum impair_action action, unsigned event,
 				unsigned biased_what, bool background, struct fd *whackfd)
 {
 	switch (action) {
-	case IMPAIR_UPDATE:
+	case CALL_IMPAIR_UPDATE:
 		/* err... */
 		break;
 	case CALL_GLOBAL_EVENT:
@@ -145,7 +146,7 @@ static void whack_impair_action(enum impair_action action, unsigned event,
 		call_state_event_inline(&logger, st, event);
 		break;
 	}
-	case INITIATE_v2_LIVENESS:
+	case CALL_INITIATE_v2_LIVENESS:
 	{
 		struct state *st = find_impaired_state(biased_what, whackfd);
 		if (st == NULL) {
@@ -163,7 +164,7 @@ static void whack_impair_action(enum impair_action action, unsigned event,
 		initiate_v2_liveness(&logger, ike);
 		break;
 	}
-	case INITIATE_v2_DELETE:
+	case CALL_INITIATE_v2_DELETE:
 	{
 		struct state *st = find_impaired_state(biased_what, whackfd);
 		if (st == NULL) {
@@ -175,7 +176,7 @@ static void whack_impair_action(enum impair_action action, unsigned event,
 		initiate_v2_delete(ike_sa(st, HERE), st);
 		break;
 	}
-	case INITIATE_v2_REKEY:
+	case CALL_INITIATE_v2_REKEY:
 	{
 		struct state *st = find_impaired_state(biased_what, whackfd);
 		if (st == NULL) {
@@ -185,6 +186,19 @@ static void whack_impair_action(enum impair_action action, unsigned event,
 		/* will log */
 		attach_logger(st, background, whackfd);
 		initiate_v2_rekey(ike_sa(st, HERE), st);
+		break;
+	}
+	case CALL_SEND_KEEPALIVE:
+	{
+		struct state *st = find_impaired_state(biased_what, whackfd);
+		if (st == NULL) {
+			/* already logged */
+			return;
+		}
+		/* will log */
+		struct logger logger = attach_logger(st, true/*background*/, whackfd);
+		log_message(RC_COMMENT, &logger, "sending keepalive");
+		send_keepalive(st, "inject keep-alive");
 		break;
 	}
 	}
@@ -202,7 +216,7 @@ static int whack_route_connection(struct connection *c,
 			       "we cannot identify ourselves with either end of this connection");
 	} else if (c->policy & POLICY_GROUP) {
 		route_group(whackfd, c);
-	} else if (!trap_connection(c)) {
+	} else if (!trap_connection(c, whackfd)) {
 		/* XXX: why whack only? */
 		log_connection(RC_ROUTE|WHACK_STREAM, whackfd, c, "could not route");
 	}
@@ -319,14 +333,14 @@ static bool whack_process(struct fd *whackfd, const struct whack_message *const 
 				lset_t old_debugging = cur_debugging & DBG_MASK;
 				lset_t new_debugging = lmod(old_debugging, m->debugging);
 				set_debugging(cur_debugging | new_debugging);
-				LSWDBGP(DBG_CONTROL, buf) {
+				LSWDBGP(DBG_BASE, buf) {
 					jam(buf, "old debugging ");
 					jam_enum_lset_short(buf, &debug_names,
 							    "+", old_debugging);
 					jam(buf, " + ");
 					jam_lmod(buf, &debug_names, "+", m->debugging);
 				}
-				LSWDBGP(DBG_CONTROL, buf) {
+				LSWDBGP(DBG_BASE, buf) {
 					jam(buf, "new debugging = ");
 					jam_enum_lset_short(buf, &debug_names,
 							    "+", new_debugging);
@@ -346,7 +360,7 @@ static bool whack_process(struct fd *whackfd, const struct whack_message *const 
 						  "no connection named \"%s\"", m->name);
 				} else if (c != NULL) {
 					c->extra_debugging = m->debugging;
-					LSWDBGP(DBG_CONTROL, buf) {
+					LSWDBGP(DBG_BASE, buf) {
 						jam(buf, "\"%s\" extra_debugging = ",
 						    c->name);
 						jam_lmod(buf, &debug_names,
@@ -462,20 +476,11 @@ static bool whack_process(struct fd *whackfd, const struct whack_message *const 
 		add_connection(whackfd, m);
 	}
 
-	if (m->active_redirect) {
-		ipstr_buf b;
-		char *redirect_gw;
-
-		redirect_gw = clone_str(ipstr(&m->active_redirect_gw, &b),
-				"active redirect gw ip");
-
-		if (!isanyaddr(&m->active_redirect_peer)) {
-			/* if we are redirecting one specific peer */
-			find_states_and_redirect(NULL, m->active_redirect_peer, redirect_gw);
-		} else {
-			/* we are redirecting all peers of one connection */
-			find_states_and_redirect(m->name, m->active_redirect_peer, redirect_gw);
-		}
+	if (m->active_redirect_dests != NULL) {
+		/*
+		 * we are redirecting all peers of one or all connections
+		 */
+		find_states_and_redirect(m->name, m->active_redirect_dests, whackfd);
 	}
 
 	/* update any socket buffer size before calling listen */
@@ -525,6 +530,10 @@ static bool whack_process(struct fd *whackfd, const struct whack_message *const 
 	if (m->whack_reread & REREAD_FETCH)
 		add_crl_fetch_requests(NULL);
 #endif
+
+	if (m->whack_reread & REREAD_CERTS) {
+		reread_cert_connections(whackfd);
+	}
 
 	if (m->whack_list & LIST_PSKS)
 		list_psks(whackfd);

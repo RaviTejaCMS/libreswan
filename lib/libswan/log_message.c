@@ -20,10 +20,8 @@
 void log_message(lset_t rc_flags, const struct logger *logger,
 		 const char *message, ...)
 {
-	LOG_MESSAGE(rc_flags, logger, buf) {
-		va_list ap;
-		va_start(ap, message);
-		jam_va_list(buf, message, ap);
-		va_end(ap);
-	}
+	va_list ap;
+	va_start(ap, message);
+	log_va_list(rc_flags, logger, message, ap);
+	va_end(ap);
 }

@@ -8,7 +8,7 @@ destination -I 192.0.1.254 192.0.2.254 is alive
 west #
  # ensure that clear text does not get through
 west #
- iptables -A INPUT -i eth1 -s 192.0.2.0/24 -j LOGDROP
+ iptables -A INPUT -i eth1 -s 192.0.2.0/24 -j DROP
 west #
  iptables -I INPUT -m policy --dir in --pol ipsec -j ACCEPT
 west #
@@ -51,7 +51,7 @@ done
 west #
  # On east this shows the duplicates on west there is nothing.
 west #
- grep "received duplicate [^ ]* message request .* fragment" /tmp/pluto.log | sed "s/last_contact=.[^ ]* /last_contact=XXX /g"
+ grep "received duplicate [^ ]* message request .* fragment" /tmp/pluto.log | sed "s/last_contact=XX.XXX[^ ]* /last_contact=XXX /g"
 west #
  ../../pluto/bin/ipsec-look.sh
 west NOW

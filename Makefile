@@ -1,4 +1,4 @@
-# Libreswan master makefile
+# Libreswan top level Makefile
 #
 # Copyright (C) 1998-2002  Henry Spencer.
 # Copyright (C) 2003-2004  Xelerance Corporation
@@ -30,11 +30,14 @@ MAIN_RPM_PREFIX  = libreswan-$(MAIN_RPM_VERSION)$(MAIN_RPM_PREVER)
 MAIN_RPM_RHEL_PKG = $(shell rpm -qf /etc/redhat-release)
 MAIN_RPM_RHEL_VERSION = $(shell echo $(MAIN_RPM_RHEL_PKG) | sed "s/.*-release-\(.\).*/\1/")
 MAIN_RPM_SPECFILE = $(shell if [ -f /etc/fedora-release ]; then echo packaging/fedora/libreswan.spec; elif [ -n "$(MAIN_RPM_RHEL_VERSION)" ]; then echo packaging/rhel/$(MAIN_RPM_RHEL_VERSION)/libreswan.spec; else echo "unknown distro, cannot find spec file to use in packaging directory"; fi)
-
+RHEL_LIKE= $(shell cat /etc/os-release | grep ID_LIKE | sed -e "s/ID_LIKE=//" -e 's/"//g' -e "s/ .*//")
+RHEL_MAJOR= $(shell cat /etc/os-release |grep VERSION_ID | sed -e 's/.*"\([0-9]*\)"/\1/' -e 's/VERSION_ID=//')
 SRCDIR?=$(shell pwd)/
 
 # dummy default rule
-def help:
+def: all
+
+help:
 	@echo
 	@echo "To build and install on a recent Linux kernel:"
 	@echo
@@ -120,7 +123,17 @@ buildready:
 	# obsolete cd doc ; $(MAKE) -s
 
 rpm:
-	# would be nice if we could support ~/.rpmmacros here
+	@if [ -d .git ]; then \
+		echo "For git trees, please run: make git-rpm" ; \
+	fi
+	@if [ ! -d .git -a -n "$(RHEL_LIKE)" ]; then \
+		rpmbuild -ba packaging/rhel/$(RHEL_MAJOR)/libreswan.spec ; \
+	fi
+	@if [ ! -d .git -a -f /etc/fedora-release ]; then \
+		rpmbuild -ba packaging/fedora/libreswan.spec ; \
+	fi
+
+git-rpm:
 	@echo building rpm for libreswan testing
 	mkdir -p ~/rpmbuild/SPECS/
 	sed  -e "s/^Version:.*/Version: $(MAIN_RPM_VERSION)/g" \
@@ -205,6 +218,7 @@ local-install:
 		echo -e "**********************************************************************\n" ; \
 	fi \
 	fi
+ifeq ($(USE_XAUTHPAM),true)
 	@if test ! -f $(DESTDIR)/etc/pam.d/pluto ; then \
 		mkdir -p $(DESTDIR)/etc/pam.d/ ; \
 		$(INSTALL) $(INSTCONFFLAGS) pam.d/pluto $(DESTDIR)/etc/pam.d/pluto ; \
@@ -214,6 +228,7 @@ local-install:
 		echo "was already present.  You may wish to update it yourself if desired." ; \
 		echo -e "**********************************************************************\n" ; \
 	fi
+endif
 
 # Test only target (run by swan-install) that generates FIPS .*.hmac
 # file for pluto that will be verified by fipscheck.

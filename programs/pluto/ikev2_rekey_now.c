@@ -81,9 +81,10 @@ void rekey_now(const char *str, enum sa_type sa_type,
 	};
 
 	/*
-	 * Loop because more than one may match (master and instances)
-	 * But at least one is required (enforced by conn_by_name).
-	 * Don't log an error if not found before we checked aliases
+	 * Loop because more than one may match (template and
+	 * instances) But at least one is required (enforced by
+	 * conn_by_name).  Don't log an error if not found before we
+	 * checked aliases
 	 *
 	 * connection instances may need more work to work ???
 	 */
@@ -121,6 +122,11 @@ void rekey_now(const char *str, enum sa_type sa_type,
 	} else {
 		/* str is a state number - this overrides ike vs ipsec rekey command */
 		struct state *st = state_by_serialno(num);
+		if (st == NULL) {
+			log_global(RC_LOG, whackfd, "can't find SA #%d to rekey", num);
+			return;
+		}
+
 		struct connection *c = st->st_connection;
 		if (IS_IKE_SA(st)) {
 			connection_buf cb;

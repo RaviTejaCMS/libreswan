@@ -65,10 +65,10 @@ static struct crypt_mac ikev2_calculate_psk_sighash(bool verify,
 	const struct connection *c = ike->sa.st_connection;
 	passert(authby == AUTHBY_PSK || authby == AUTHBY_NULL);
 
-	DBG(DBG_CONTROL, DBG_log("ikev2_calculate_psk_sighash() called from %s to %s PSK with authby=%s",
-		ike->sa.st_state->name,
-		verify ? "verify" : "create",
-		enum_name(&keyword_authby_names, authby)));
+	dbg("ikev2_calculate_psk_sighash() called from %s to %s PSK with authby=%s",
+	    ike->sa.st_state->name,
+	    verify ? "verify" : "create",
+	    enum_name(&keyword_authby_names, authby));
 
 	/* pick nullauth_pss, nonce, and nonce_name suitable for (state, verify) */
 
@@ -245,7 +245,7 @@ bool ikev2_verify_psk_auth(enum keyword_authby authby,
 	}
 
 	struct crypt_mac calc_hash = ikev2_calculate_psk_sighash(TRUE, ike, authby, idhash,
-								 ike->sa.st_firstpacket_him);
+								 ike->sa.st_firstpacket_peer);
 	if (calc_hash.len == 0) {
 		return false;
 	}

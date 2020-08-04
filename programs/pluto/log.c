@@ -44,6 +44,12 @@
 #include "demux.h"	/* for struct msg_digest */
 #include "pending.h"
 
+struct logger failsafe_logger = {
+	.where = { .basename = "<global>", .func = "<global>", },
+	.object = NULL,
+	.object_vec = &logger_global_vec,
+};
+
 bool
 	log_to_stderr = TRUE,		/* should log go to stderr? */
 	log_to_syslog = TRUE,		/* should log go to syslog? */
@@ -421,7 +427,9 @@ void jambuf_to_whack(struct lswlog *buf, const struct fd *whackfd, enum rc_type 
 	};
 
 	/* write to whack socket, but suppress possible SIGPIPE */
-	fd_sendmsg(whackfd, &msg, MSG_NOSIGNAL, HERE);
+	if (fd_sendmsg(whackfd, &msg, MSG_NOSIGNAL, HERE) < 0) {
+		stdlog_raw("whack: ", "write to whack socket failed");
+	}
 }
 
 /*
@@ -434,7 +442,7 @@ bool whack_prompt_for(struct state *st, const char *prompt,
 
 	/*
 	 * XXX: This includes the connection name twice: first from
-	 * the state prefix; and second explictly.  Only reason is so
+	 * the state prefix; and second explicitly.  Only reason is so
 	 * that tests are happy.
 	 */
 	LSWBUF(buf) {
@@ -677,17 +685,16 @@ static void rate_log_raw(const char *prefix,
 void rate_log(const struct msg_digest *md,
 	      const char *message, ...)
 {
-	struct logger logger = MESSAGE_LOGGER(md);
 	unsigned limit = log_limit();
 	va_list ap;
 	va_start(ap, message);
 	if (nr_rate_limited_logs < limit) {
-		rate_log_raw("", &logger, message, ap);
+		rate_log_raw("", md->md_logger, message, ap);
 	} else if (nr_rate_limited_logs == limit) {
-		rate_log_raw("", &logger, message, ap);
+		rate_log_raw("", md->md_logger, message, ap);
 		plog_global("rate limited log reached limit of %u entries", limit);
 	} else if (DBGP(DBG_BASE)) {
-		rate_log_raw(DEBUG_PREFIX, &logger, message, ap);
+		rate_log_raw(DEBUG_PREFIX, md->md_logger, message, ap);
 	}
 	va_end(ap);
 	nr_rate_limited_logs++;
@@ -912,6 +919,16 @@ static size_t jam_string_prefix(jambuf_t *buf, const void *object)
 	return jam_string(buf, string);
 }
 
+struct logger *alloc_logger(void *object, const struct logger_object_vec *vec, where_t where)
+{
+	struct logger logger = {
+		.object = object,
+		.object_vec = vec,
+		.where = where,
+	};
+	return clone_thing(logger, "logger");
+}
+
 struct logger *clone_logger(const struct logger *stack)
 {
 	/*
@@ -1004,3 +1021,71 @@ struct logger cur_logger(void)
 
 	return GLOBAL_LOGGER(whack_log_fd);
 };
+
+/*
+ * XXX: these were macros only older GCC's, seeing for some code
+ * paths, OBJECT was always non-NULL and pexpect(OBJECT!=NULL) was
+ * constant, would generate a -Werror=address:
+ *
+ * error: the comparison will always evaluate as 'true' for the
+ * address of 'stack_md' will never be NULL [-Werror=address]
+ */
+
+void log_md(lset_t rc_flags, const struct msg_digest *md, const char *msg, ...)
+{
+	struct logger *logger =
+		(pexpect(md != NULL) && pexpect(md->md_logger != NULL) && pexpect(in_main_thread()))
+		? md->md_logger
+		: &failsafe_logger;
+	va_list ap;
+	va_start(ap, msg);
+	log_va_list(rc_flags, logger, msg, ap);
+	va_end(ap);
+}
+
+void log_connection(lset_t rc_flags, struct fd *whackfd,
+		    const struct connection *c, const char *msg, ...)
+{
+	va_list ap;
+	va_start(ap, msg);
+	struct logger logger = (pexpect(c != NULL) && pexpect(in_main_thread()))
+		? CONNECTION_LOGGER(c, whackfd)
+		: failsafe_logger;
+	log_va_list(rc_flags, &logger, msg, ap);
+	va_end(ap);
+}
+
+void log_pending(lset_t rc_flags, const struct pending *p, const char *msg, ...)
+{
+	va_list ap;
+	va_start(ap, msg);
+	struct logger logger = (pexpect(p != NULL) && pexpect(in_main_thread()))
+		? PENDING_LOGGER(p)
+		: failsafe_logger;
+	log_va_list(rc_flags, &logger, msg, ap);
+	va_end(ap);
+}
+
+void log_state(lset_t rc_flags, const struct state *st,
+	       const char *msg, ...)
+{
+	va_list ap;
+	va_start(ap, msg);
+	if (pexpect((st) != NULL) &&
+	    pexpect(in_main_thread())) {
+		struct logger logger = *(st->st_logger);
+		/*
+		 * XXX: the state logger still needs to pick up the
+		 * global whack FD :-(
+		 */
+		if (whack_log_fd != NULL) {
+			logger.global_whackfd = whack_log_fd;
+		}
+		log_va_list(rc_flags, &logger, msg, ap);
+	} else {
+		/* still get the message out */
+		log_va_list(rc_flags, &failsafe_logger, msg, ap);
+
+	}
+	va_end(ap);
+}

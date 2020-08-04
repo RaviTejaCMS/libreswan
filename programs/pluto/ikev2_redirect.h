@@ -21,7 +21,19 @@
 #include "packet.h"
 
 extern enum allow_global_redirect global_redirect;
-extern char *global_redirect_to;
+
+extern const char *global_redirect_to(void);
+
+extern void free_global_redirect_dests(void);
+
+/*
+ * Initialize the static struct redirect_dests variable.
+ *
+ * @param grd_str comma-separated string containing the destinations
+ *  (a copy will be made so caller need not preserve the string).
+ *  If it is not specified in conf file, gdr_str will be NULL.
+ */
+extern void set_global_redirect_dests(const char *gdr_str);
 
 /*
  * Check whether we received v2N_REDIRECT_SUPPORTED (in IKE_SA_INIT request),
@@ -50,7 +62,7 @@ extern bool emit_redirected_from_notification(
  * @param pbs output stream
  */
 extern bool emit_redirect_notification(
-		const char *destination,
+		const shunk_t destination,
 		pb_stream *pbs);
 
 /*
@@ -68,10 +80,11 @@ extern bool emit_redirect_notification(
  * @return err_t NULL if everything went right,
  * 		 otherwise (non-NULL)  what went wrong
  */
-extern err_t parse_redirect_payload(pb_stream *input,
+extern err_t parse_redirect_payload(const struct pbs_in *pbs,
 				    const char *allowed_targets_list,
 				    const chunk_t *nonce,
-				    ip_address *redirect_ip /* result */);
+				    ip_address *redirect_ip /* result */,
+				    struct logger *logger);
 
 /*
  * Initiate via initiate_connection new IKE_SA_INIT exchange
@@ -79,12 +92,25 @@ extern err_t parse_redirect_payload(pb_stream *input,
 extern void initiate_redirect(struct state *st);
 
 /*
+ * Used for active redirect mechanism (RFC 5685)
+ *
+ * @param conn_name name of the connection whose peers should be
+ * 	  redirected. If it's NULL, that means redirect ALL active
+ * 	  peers on the machine.
+ * @param ard_str comma-separated string containing the destinations.
+ * @param whackfd whack file descriptor used for whack log
+ */
+extern void find_states_and_redirect(const char *conn_name,
+				     char *ard_str,
+				     struct fd *whackfd);
+
+/*
  * Send IKEv2 INFORMATIONAL exchange with REDIRECT payload.
  * This is the case of redirection during the active tunnel.
  */
 extern void send_active_redirect_in_informational(struct state *st);
 
-stf_status process_IKE_SA_INIT_v2N_REDIRECT_response(struct ike_sa *ike,
+extern stf_status process_IKE_SA_INIT_v2N_REDIRECT_response(struct ike_sa *ike,
 						     struct child_sa *child,
 						     struct msg_digest *md);
 

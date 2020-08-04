@@ -59,7 +59,8 @@
 #include "pluto_crypt.h"
 #include "enum_names.h"
 #include "virtual.h"	/* needs connections.h */
-#include "state_db.h"	/* for init_state_db() */
+#include "state_db.h"		/* for init_state_db() */
+#include "connection_db.h"	/* for connection_state_db() */
 #include "nat_traversal.h"
 #include "ike_alg.h"
 #include "ikev2_redirect.h"
@@ -140,12 +141,12 @@ static void free_pluto_main(void)
 	pfreeany(ocsp_uri);
 	pfreeany(ocsp_trust_name);
 	pfreeany(peerlog_basedir);
-	pfreeany(global_redirect_to);
 	pfreeany(curl_iface);
 	pfreeany(pluto_log_file);
 	pfreeany(pluto_dnssec_rootfile);
 	pfreeany(pluto_dnssec_trusted);
 	pfreeany(rundir);
+	free_global_redirect_dests();
 }
 
 /*
@@ -166,7 +167,7 @@ static void invocation_fail(err_t mess)
 
 /* string naming compile-time options that have interop implications */
 static const char compile_time_interop_options[] = ""
-#ifdef NETKEY_SUPPORT
+#ifdef XFRM_SUPPORT
 	" XFRM(netkey)"
 #endif
 #ifdef USE_XFRM_INTERFACE
@@ -198,7 +199,7 @@ static const char compile_time_interop_options[] = ""
 #ifdef NSS_IPSEC_PROFILE
 	" (IPsec profile)"
 #endif
-#ifdef USE_NSS_PRF
+#ifdef USE_NSS_KDF
         " (NSS-PRF)"
 #else
         " (native-PRF)"
@@ -395,8 +396,8 @@ static void get_bsi_random(size_t nbytes, unsigned char *buf)
 	}
 
 	ndone = 0;
-		DBG(DBG_CONTROL, DBG_log("need %d bits random for extra seeding of the NSS PRNG",
-			(int) nbytes * BITS_PER_BYTE));
+	dbg("need %d bits random for extra seeding of the NSS PRNG",
+	    (int) nbytes * BITS_PER_BYTE);
 
 	while (ndone < nbytes) {
 		got = read(dev, buf + ndone, nbytes - ndone);
@@ -412,8 +413,7 @@ static void get_bsi_random(size_t nbytes, unsigned char *buf)
 		ndone += got;
 	}
 	close(dev);
-	DBG(DBG_CONTROL, DBG_log("read %zu bytes from /dev/random for NSS PRNG",
-		nbytes));
+	dbg("read %zu bytes from /dev/random for NSS PRNG", nbytes);
 }
 
 static void pluto_init_nss(char *nssdir)
@@ -533,11 +533,9 @@ static const struct option long_opts[] = {
 	{ "crlcheckinterval\0", required_argument, NULL, 'x' },
 	{ "uniqueids\0", no_argument, NULL, 'u' },
 	{ "no-dnssec\0", no_argument, NULL, 'R' },
-	{ "nokernel\0>use-nostack", no_argument, NULL, 'n' },	/* redundant spelling */
-	{ "use-nostack\0",  no_argument, NULL, 'n' },
-	{ "use-none\0>use-nostack", no_argument, NULL, 'n' },	/* redundant spelling */
 	{ "use-auto\0>use-netkey",  no_argument, NULL, 'K' },   /* redundant spelling (sort of) */
 	{ "usenetkey\0>use-netkey", no_argument, NULL, 'K' },	/* redundant spelling */
+	{ "use-xfrm\0", no_argument, NULL, 'K' },
 	{ "use-netkey\0", no_argument, NULL, 'K' },
 	{ "use-bsdkame\0",   no_argument, NULL, 'F' },
 	{ "interface\0<ifname|ifaddr>", required_argument, NULL, 'i' },
@@ -546,12 +544,11 @@ static const struct option long_opts[] = {
 	{ "curl-timeout\0<secs>", required_argument, NULL, 'I' },
 	{ "curl-timeout\0<secs>", required_argument, NULL, 'I' }, /* _ */
 	{ "listen\0<ifaddr>", required_argument, NULL, 'L' },
-	{ "ikeport\0<port-number>", required_argument, NULL, 'p' },
-	{ "tcpport\0<port-number>", required_argument, NULL, 'm' },
+	{ "listen-tcp\0", no_argument, NULL, 'm' },
+	{ "no-listen-udp\0", no_argument, NULL, 'p' },
 	{ "ike-socket-bufsize\0<buf-size>", required_argument, NULL, 'W' },
 	{ "ike-socket-no-errqueue\0", no_argument, NULL, '1' },
 	{ "nflog-all\0<group-number>", required_argument, NULL, 'G' },
-	{ "natikeport\0<port-number>", required_argument, NULL, 'q' },
 	{ "rundir\0<path>", required_argument, NULL, 'b' }, /* was ctlbase */
 	{ "ctlbase\0<path>", required_argument, NULL, 'b' }, /* backwards compatibility */
 	{ "secretsfile\0<secrets-file>", required_argument, NULL, 's' },
@@ -714,7 +711,7 @@ int main(int argc, char **argv)
 	 * We read the intentions for how to log from command line options
 	 * and the config file. Then we prepare to be able to log, but until
 	 * then log to stderr (better then nothing). Once we are ready to
-	 * actually do loggin according to the methods desired, we set the
+	 * actually do logging according to the methods desired, we set the
 	 * variables for those methods
 	 */
 	bool log_to_stderr_desired = FALSE;
@@ -944,15 +941,11 @@ int main(int argc, char **argv)
 			continue;
 
 		case 'K':	/* --use-netkey */
-#ifdef NETKEY_SUPPORT
-			kernel_ops = &netkey_kernel_ops;
+#ifdef XFRM_SUPPORT
+			kernel_ops = &xfrm_kernel_ops;
 #else
-			libreswan_log("--use-netkey not supported");
+			libreswan_log("--use-xfrm not supported");
 #endif
-			continue;
-
-		case 'n':	/* --use-nostack */
-			kernel_ops = &nokernel_kernel_ops;
 			continue;
 
 		case 'D':	/* --force-busy */
@@ -1074,23 +1067,6 @@ int main(int argc, char **argv)
 			}
 			continue;
 
-		/*
-		 * This option does not really work, as this is the "left"
-		 * site only, you also need --to --ikeport again later on
-		 * It will result in: yourport -> 500, still not bypassing
-		 * filters
-		 */
-		case 'p':	/* --ikeport <portnumber> */
-			ugh = ttoulb(optarg, 0, 10, 0xFFFF, &u);
-			if (ugh != NULL)
-				break;
-			if (u == 0) {
-				ugh = "must not be 0";
-				break;
-			}
-			pluto_port = u;
-			continue;
-
 		case '1':	/* --ike-socket-no-errqueue */
 			pluto_sock_errqueue = FALSE;
 			continue;
@@ -1106,26 +1082,12 @@ int main(int argc, char **argv)
 			pluto_sock_bufsize = u;
 			continue;
 
-		case 'q':	/* --natikeport <portnumber> */
-			ugh = ttoulb(optarg, 0, 10, 0xFFFF, &u);
-			if (ugh != NULL)
-				break;
-			if (u == 0) {
-				ugh = "must not be 0";
-				break;
-			}
-			pluto_nat_port = u;
+		case 'p':	/* --no-listen-udp */
+			pluto_listen_udp = FALSE;
 			continue;
 
-		case 'm':	/* --tcpport <portnumber> */
-			ugh = ttoulb(optarg, 0, 10, 0xFFFF, &u);
-			if (ugh != NULL)
-				break;
-			if (u == 0) {
-				ugh = "must not be 0";
-				break;
-			}
-			pluto_tcpport = u;
+		case 'm':	/* --listen-tcp */
+			pluto_listen_tcp = TRUE;
 			continue;
 
 		case 'b':	/* --rundir <path> */
@@ -1188,12 +1150,10 @@ int main(int argc, char **argv)
 			if (ugh != NULL) {
 				break;
 			} else {
-				pfreeany(global_redirect_to);
-				global_redirect_to =
-					clone_str(optarg, "global_redirect_to");
+				set_global_redirect_dests(optarg);
 				libreswan_log(
 					"all IKE_SA_INIT requests will from now on be redirected to: %s\n",
-					 global_redirect_to);
+					 optarg);
 			}
 		}
 			continue;
@@ -1317,18 +1277,15 @@ int main(int argc, char **argv)
 			set_cfg_string(&pluto_listen,
 				cfg->setup.strings[KSF_LISTEN]);
 
-			/* --ikeport */
-			pluto_port = cfg->setup.options[KBF_IKEPORT];
-
-			/* --ike-socket-bufsize */
+			/* ike-socket-bufsize= */
 			pluto_sock_bufsize = cfg->setup.options[KBF_IKEBUF];
 			pluto_sock_errqueue = cfg->setup.options[KBF_IKE_ERRQUEUE];
 
-			/* --tcpport */
-			pluto_tcpport = cfg->setup.options[KBF_TCPPORT];
+			/* listen-tcp= / listen-udp= */
+			pluto_listen_tcp = cfg->setup.options[KBF_LISTEN_TCP];
+			pluto_listen_udp = cfg->setup.options[KBF_LISTEN_UDP];
 
-
-			/* --nflog-all */
+			/* nflog-all= */
 			/* only causes nflog nmber to show in ipsec status */
 			pluto_nflog_group = cfg->setup.options[KBF_NFLOG_ALL];
 
@@ -1336,27 +1293,27 @@ int main(int argc, char **argv)
 			pluto_xfrmlifetime = cfg->setup.options[KBF_XFRMLIFETIME];
 
 			/* no config option: rundir */
-			/* --secrets */
+			/* secretsfile= */
 			if (cfg->setup.strings[KSF_SECRETSFILE] &&
 			    *cfg->setup.strings[KSF_SECRETSFILE]) {
 				lsw_conf_secretsfile(cfg->setup.strings[KSF_SECRETSFILE]);
 			}
 			if (cfg->setup.strings[KSF_IPSECDIR] != NULL &&
 				*cfg->setup.strings[KSF_IPSECDIR] != 0) {
-				/* --ipsecdir */
+				/* ipsecdir= */
 				lsw_conf_confddir(cfg->setup.strings[KSF_IPSECDIR]);
 			}
 
 			if (cfg->setup.strings[KSF_NSSDIR] != NULL &&
 				*cfg->setup.strings[KSF_NSSDIR] != 0) {
-				/* --nssdir <path> */
+				/* nssdir= */
 				lsw_conf_nssdir(cfg->setup.strings[KSF_NSSDIR]);
 			}
 
-			/* --perpeerlog */
+			/* perpeerlog= */
 			log_to_perpeer = cfg->setup.options[KBF_PERPEERLOG];
 			if (log_to_perpeer) {
-				/* --perpeerlogbase */
+				/* perpeerlogbase= */
 				if (cfg->setup.strings[KSF_PERPEERDIR]) {
 					set_cfg_string(&peerlog_basedir,
 						cfg->setup.strings[KSF_PERPEERDIR]);
@@ -1381,7 +1338,7 @@ int main(int argc, char **argv)
 				coredir = clone_str(cfg->setup.strings[KSF_DUMPDIR],
 						"coredir via --config");
 			}
-			/* --vendorid */
+			/* vendorid= */
 			if (cfg->setup.strings[KSF_MYVENDORID]) {
 				pfree(pluto_vendorid);
 				pluto_vendorid = clone_str(cfg->setup.strings[KSF_MYVENDORID],
@@ -1401,15 +1358,12 @@ int main(int argc, char **argv)
 			}
 
 			pluto_nss_seedbits = cfg->setup.options[KBF_SEEDBITS];
-			pluto_nat_port =
-				cfg->setup.options[KBF_NATIKEPORT];
 			keep_alive = deltatime(cfg->setup.options[KBF_KEEPALIVE]);
 
 			set_cfg_string(&virtual_private,
 				cfg->setup.strings[KSF_VIRTUALPRIVATE]);
 
-			set_cfg_string(&global_redirect_to,
-				cfg->setup.strings[KSF_GLOBAL_REDIRECT_TO]);
+			set_global_redirect_dests(cfg->setup.strings[KSF_GLOBAL_REDIRECT_TO]);
 
 			nhelpers = cfg->setup.options[KBF_NHELPERS];
 			secctx_attr_type = cfg->setup.options[KBF_SECCTX];
@@ -1419,25 +1373,28 @@ int main(int argc, char **argv)
 			passert(kernel_ops != NULL);
 
 			if (!(protostack == NULL || *protostack == '\0')) {
-				if (streq(protostack, "none")) {
-					kernel_ops = &nokernel_kernel_ops;
-				} else if (streq(protostack, "auto")) {
-					libreswan_log("the option protostack=auto is obsoleted, falling back to protostack=%s",
-						kernel_ops->kern_name);
-#ifdef NETKEY_SUPPORT
-				} else if (streq(protostack, "netkey") ||
-					streq(protostack, "native")) {
-						kernel_ops = &netkey_kernel_ops;
+				if (streq(protostack, "auto") || streq(protostack, "native") ||
+					streq(protostack, "nokernel")) {
+
+					libreswan_log("the option protostack=%s is obsoleted, falling back to protostack=%s",
+						      protostack, kernel_ops->kern_name);
+				} else if (streq(protostack, "klips")) {
+					libreswan_log("protostack=klips is obsoleted, please migrate to protostack=xfrm");
+					exit_pluto(PLUTO_EXIT_KERNEL_FAIL);
+#ifdef XFRM_SUPPORT
+				} else if (streq(protostack, "xfrm") ||
+					   streq(protostack, "netkey")) {
+					kernel_ops = &xfrm_kernel_ops;
 #endif
 #ifdef BSD_KAME
 				} else if (streq(protostack, "bsd") ||
-					streq(protostack, "kame") ||
-					streq(protostack, "bsdkame")) {
-						kernel_ops = &bsdkame_kernel_ops;
+					   streq(protostack, "kame") ||
+					   streq(protostack, "bsdkame")) {
+					kernel_ops = &bsdkame_kernel_ops;
 #endif
 				} else {
 					libreswan_log("protostack=%s ignored, using default protostack=%s",
-						protostack, kernel_ops->kern_name);
+						      protostack, kernel_ops->kern_name);
 				}
 			}
 
@@ -1662,10 +1619,9 @@ int main(int argc, char **argv)
 	init_constants();
 	init_pluto_constants();
 	pluto_init_log();
-	pluto_init_nss(oco->nssdir);
 
-	enum lsw_fips_mode pluto_fips_mode = lsw_get_fips_mode();
-	if (pluto_fips_mode == LSW_FIPS_ON) {
+	pluto_init_nss(oco->nssdir);
+	if (libreswan_fipsmode()) {
 		/*
 		 * clear out --debug-crypt if set
 		 *
@@ -1676,10 +1632,43 @@ int main(int argc, char **argv)
 			cur_debugging &= ~DBG_PRIVATE;
 			loglog(RC_LOG_SERIOUS, "FIPS mode: debug-private disabled as such logging is not allowed");
 		}
+		/*
+		 * clear out --debug-crypt if set
+		 *
+		 * impairs are also not allowed but cannot come in via
+		 * ipsec.conf, only whack
+		 */
+		if (cur_debugging & DBG_CRYPT) {
+			cur_debugging &= ~DBG_CRYPT;
+			loglog(RC_LOG_SERIOUS, "FIPS mode: debug-crypt disabled as such logging is not allowed");
+		}
 	}
+
+	/*
+	 * If impaired, force the mode change; and verify the
+	 * consequences.  Always run the tests as combinations such as
+	 * NSS in fips mode but as out of it could be bad.
+	 */
+
 	if (impair.force_fips) {
-		libreswan_log("Forcing FIPS checks to true to emulate FIPS mode");
+		libreswan_log("IMPAIR: forcing FIPS checks to true to emulate FIPS mode");
 		lsw_set_fips_mode(LSW_FIPS_ON);
+	}
+
+	bool nss_fips_mode = PK11_IsFIPS();
+	if (libreswan_fipsmode()) {
+		libreswan_log("FIPS mode enabled for pluto daemon");
+		if (nss_fips_mode) {
+			libreswan_log("NSS library is running in FIPS mode");
+		} else {
+			loglog(RC_LOG_SERIOUS, "ABORT: pluto in FIPS mode but NSS library is not");
+			exit_pluto(PLUTO_EXIT_FIPS_FAIL);
+		}
+	} else {
+		libreswan_log("FIPS mode disabled for pluto daemon");
+		if (nss_fips_mode) {
+			loglog(RC_LOG_SERIOUS, "Warning: NSS library is running in FIPS mode");
+		}
 	}
 
 	if (ocsp_enable) {
@@ -1692,44 +1681,6 @@ int main(int argc, char **argv)
 		} else {
 			libreswan_log("NSS OCSP started");
 		}
-	}
-
-	/*
-	 * Probe FIPS support.  Part #2 of #2.
-	 *
-	 * Now that NSS is initialized, need to verify it matches the
-	 * mode pluto is in.
-	 */
-	bool nss_fips_mode = PK11_IsFIPS();
-
-	/*
-	 * Now verify the consequences.  Always run the tests
-	 * as combinations such as NSS in fips mode but as out
-	 * of it could be bad.
-	 */
-	switch (pluto_fips_mode) {
-	case LSW_FIPS_UNKNOWN:
-		loglog(RC_LOG_SERIOUS, "ABORT: pluto FIPS mode could not be determined");
-		exit_pluto(PLUTO_EXIT_FIPS_FAIL);
-		break;
-	case LSW_FIPS_ON:
-		libreswan_log("FIPS mode enabled for pluto daemon");
-		if (nss_fips_mode) {
-			libreswan_log("NSS library is running in FIPS mode");
-		} else {
-			loglog(RC_LOG_SERIOUS, "ABORT: pluto in FIPS mode but NSS library is not");
-			exit_pluto(PLUTO_EXIT_FIPS_FAIL);
-		}
-		break;
-	case LSW_FIPS_OFF:
-		libreswan_log("FIPS mode disabled for pluto daemon");
-		if (nss_fips_mode) {
-			loglog(RC_LOG_SERIOUS, "Warning: NSS library is running in FIPS mode");
-		}
-		break;
-	case LSW_FIPS_UNSET:
-	default:
-		bad_case(pluto_fips_mode);
 	}
 
 #ifdef FIPS_CHECK
@@ -1822,6 +1773,7 @@ int main(int argc, char **argv)
 /* Initialize all of the various features */
 
 	init_state_db();
+	init_connection_db();
 	init_server();
 
 	init_rate_log();
@@ -2020,14 +1972,13 @@ void show_setup_plutomain(struct show *s)
 
 	show_comment(s,
 		"ddos-cookies-threshold=%d, ddos-max-halfopen=%d, ddos-mode=%s",
-		pluto_max_halfopen,
 		pluto_ddos_threshold,
+		pluto_max_halfopen,
 		(pluto_ddos_mode == DDOS_AUTO) ? "auto" :
 			(pluto_ddos_mode == DDOS_FORCE_BUSY) ? "busy" : "unlimited");
 
 	show_comment(s,
-		"ikeport=%d, ikebuf=%d, msg_errqueue=%s, strictcrlpolicy=%s, crlcheckinterval=%jd, listen=%s, nflog-all=%d",
-		pluto_port,
+		"ikebuf=%d, msg_errqueue=%s, strictcrlpolicy=%s, crlcheckinterval=%jd, listen=%s, nflog-all=%d",
 		pluto_sock_bufsize,
 		bool_str(pluto_sock_errqueue),
 		bool_str(crl_strict),
@@ -2057,7 +2008,7 @@ void show_setup_plutomain(struct show *s)
 	show_comment(s,
 		"global-redirect=%s, global-redirect-to=%s",
 		enum_name(&allow_global_redirect_names, global_redirect),
-		global_redirect_to != NULL ? global_redirect_to : "<unset>"
+		global_redirect_to()
 		);
 
 #ifdef HAVE_LABELED_IPSEC

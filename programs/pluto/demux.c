@@ -101,9 +101,7 @@ static enum iface_status read_message(const struct iface_port *ifp,
 	 * Create the real message digest; and set up md->packet_pbs
 	 * to describe it.
 	 */
-	struct msg_digest *md = alloc_md("msg_digest in read_packet");
-	md->sender = packet.sender;
-	md->iface = ifp;
+	struct msg_digest *md = alloc_md(ifp, &packet.sender, HERE);
 	init_pbs(&md->packet_pbs,
 		 clone_bytes(packet.ptr, packet.len,
 			     "message buffer in read_packet()"),
@@ -118,7 +116,7 @@ static enum iface_status read_message(const struct iface_port *ifp,
 	    str_endpoint(&ifp->local_endpoint, &lb),
 	    ifp->protocol->name);
 
-	if (DBGP(DBG_RAW)) {
+	if (DBGP(DBG_BASE)) {
 		DBG_dump(NULL, md->packet_pbs.start, pbs_room(&md->packet_pbs));
 	}
 
@@ -143,10 +141,10 @@ static enum iface_status read_message(const struct iface_port *ifp,
 void process_packet(struct msg_digest **mdp)
 {
 	struct msg_digest *md = *mdp;
-	struct logger logger = MESSAGE_LOGGER(md);
+	struct logger *logger = md->md_logger;
 
 	if (!pbs_in_struct(&md->packet_pbs, &md->hdr, sizeof(md->hdr),
-			   &isakmp_hdr_desc, &md->message_pbs, &logger)) {
+			   &isakmp_hdr_desc, &md->message_pbs, logger)) {
 		/*
 		 * The packet was very badly mangled. We can't be sure
 		 * of any content - not even to look for major version
@@ -160,7 +158,7 @@ void process_packet(struct msg_digest **mdp)
 		/* Some (old?) versions of the Cisco VPN client send an additional
 		 * 16 bytes of zero bytes - Complain but accept it
 		 */
-		if (DBGP(DBG_CONTROL)) {
+		if (DBGP(DBG_BASE)) {
 			DBG_log("size (%u) in received packet is larger than the size specified in ISAKMP HDR (%u) - ignoring extraneous bytes",
 				(unsigned) pbs_room(&md->packet_pbs),
 				md->hdr.isa_length);
@@ -345,7 +343,7 @@ static void process_md_clone(struct msg_digest *orig, const char *fmt, ...)
 		va_end(ap);
 		lswlogf(buf, " (%d bytes)", (int)pbs_room(&md->packet_pbs));
 	}
-	if (DBGP(DBG_RAW)) {
+	if (DBGP(DBG_BASE)) {
 		DBG_dump(NULL, md->packet_pbs.start, pbs_room(&md->packet_pbs));
 	}
 
@@ -471,7 +469,7 @@ enum ike_version hdr_ike_version(const struct isakmp_hdr *hdr)
  *   either of the initiator and/or responder values
  *
  * - encourages the coding style where the two cases - REQUEST and
- *   RESPONSE - are clearly labled, that is:
+ *   RESPONSE - are clearly labeled, that is:
  *
  *       switch(role) {
  *       case MESSAGE_REQUEST: ...; break;
@@ -534,14 +532,14 @@ char *cisco_stringify(pb_stream *input_pbs, const char *attr_name)
 			/*
 			 * preserve sanitize_string() behaviour:
 			 *
-			 * exception is that all veritical space just
+			 * exception is that all vertical space just
 			 * becomes white space
 			 */
 			jam(&buf, " ");
 			break;
 		default:
 			/*
-			 * preserve sanitize_string() behavour:
+			 * preserve sanitize_string() behaviour:
 			 *
 			 * XXX: isprint() is wrong as it is affected
 			 * by locale - need portable is printable

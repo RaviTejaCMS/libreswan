@@ -57,7 +57,7 @@ typedef enum keyword_set int_set[KEY_NUMERIC_ROOF];
  */
 
 struct starter_end {
-	sa_family_t addr_family;
+	const struct ip_info *host_family;
 	enum keyword_host addrtype;
 	enum keyword_host nexttype;
 	ip_address addr;
@@ -76,7 +76,6 @@ struct starter_end {
 	enum keyword_pubkey rsakey1_type, rsakey2_type;
 	char *rsakey1;
 	char *rsakey2;
-	bool has_client_wildcard;
 	bool key_from_DNS_on_demand;
 	char *virt;
 	char *certx;

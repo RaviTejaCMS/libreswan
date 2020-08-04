@@ -23,14 +23,33 @@
 
 const ip_address unset_address; /* all zeros */
 
+ip_address strip_endpoint(const ip_address *in, where_t where)
+{
+	ip_address out = *in;
+	if (in->hport != 0 || in->ipproto != 0 || in->is_endpoint) {
+		address_buf b;
+		dbg("stripping address %s of is_endpoint=%d hport=%u ipproto=%u "PRI_WHERE,
+		    str_address(in, &b), in->is_endpoint,
+		    in->hport, in->ipproto, pri_where(where));
+		out.hport = 0;
+		out.ipproto = 0;
+		out.is_endpoint = false;
+	}
+	out.is_address = true;
+	paddress(&out);
+	return out;
+}
+
 ip_address address_from_shunk(const struct ip_info *afi, const shunk_t bytes)
 {
 	passert(afi != NULL);
 	ip_address address = {
 		.version = afi->ip_version,
+		.is_address = true,
 	};
 	passert(afi->ip_size == bytes.len);
-	memcpy(address.bytes, bytes.ptr, bytes.len);
+	memcpy(&address.bytes, bytes.ptr, bytes.len);
+	paddress(&address);
 	return address;
 }
 
@@ -90,7 +109,7 @@ shunk_t address_as_shunk(const ip_address *address)
 	if (afi == NULL) {
 		return null_shunk;
 	}
-	return shunk2(address->bytes, afi->ip_size);
+	return shunk2(&address->bytes, afi->ip_size);
 }
 
 chunk_t address_as_chunk(ip_address *address)
@@ -102,7 +121,7 @@ chunk_t address_as_chunk(ip_address *address)
 	if (afi == NULL) {
 		return empty_chunk;
 	}
-	return chunk2(address->bytes, afi->ip_size);
+	return chunk2(&address->bytes, afi->ip_size);
 }
 
 /*
@@ -320,6 +339,7 @@ const char *str_address_reversed(const ip_address *src,
 
 ip_address address_any(const struct ip_info *info)
 {
+	passert(info != NULL);
 	if (info == NULL) {
 		/*
 		 * XXX: Loudly reject AF_UNSPEC, but don't crash.
@@ -348,11 +368,10 @@ bool address_is_any(const ip_address *address)
 	const struct ip_info *type = address_type(address);
 	if (type == NULL) {
 		return false;
-	} else {
-		shunk_t addr = address_as_shunk(address);
-		shunk_t any = address_as_shunk(&type->any_address);
-		return hunk_eq(addr, any);
 	}
+	shunk_t addr = address_as_shunk(address);
+	shunk_t any = address_as_shunk(&type->any_address);
+	return hunk_eq(addr, any);
 }
 
 bool address_is_specified(const ip_address *address)
@@ -360,11 +379,10 @@ bool address_is_specified(const ip_address *address)
 	const struct ip_info *type = address_type(address);
 	if (type == NULL) {
 		return false;
-	} else {
-		shunk_t addr = address_as_shunk(address);
-		shunk_t any = address_as_shunk(&type->any_address);
-		return !hunk_eq(addr, any);
 	}
+	shunk_t addr = address_as_shunk(address);
+	shunk_t any = address_as_shunk(&type->any_address);
+	return !hunk_eq(addr, any);
 }
 
 bool address_is_loopback(const ip_address *address)
@@ -372,11 +390,10 @@ bool address_is_loopback(const ip_address *address)
 	const struct ip_info *type = address_type(address);
 	if (type == NULL) {
 		return false;
-	} else {
-		shunk_t addr = address_as_shunk(address);
-		shunk_t loopback = address_as_shunk(&type->loopback_address);
-		return hunk_eq(addr, loopback);
 	}
+	shunk_t addr = address_as_shunk(address);
+	shunk_t loopback = address_as_shunk(&type->loopback_address);
+	return hunk_eq(addr, loopback);
 }
 
 /*

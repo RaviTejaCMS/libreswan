@@ -28,24 +28,35 @@ struct logger;
  * Meddle with the contents of a payload.
  */
 
-enum send_impairment {
-	SEND_NORMAL = 0,
-	SEND_OMIT,
-	SEND_EMPTY,
-	SEND_DUPLICATE,
-	SEND_ROOF, /* >= ROOF -> <number> */
+enum impair_emit {
+	IMPAIR_EMIT_NO = 0,
+	IMPAIR_EMIT_OMIT,
+	IMPAIR_EMIT_EMPTY,
+	IMPAIR_EMIT_DUPLICATE,
+	IMPAIR_EMIT_ROOF, /* >= ROOF -> <number> */
 };
 
 /*
  * Meddle with a specific exchange.
  */
 
-enum exchange_impairment {
-	NO_EXCHANGE = 0,
-	NOTIFICATION_EXCHANGE,
-	QUICK_EXCHANGE,
-	XAUTH_EXCHANGE,
-	DELETE_EXCHANGE,
+enum impair_v1_exchange {
+	IMPAIR_v1_EXCHANGE_NO = 0,
+	IMPAIR_v1_NOTIFICATION_EXCHANGE,
+	IMPAIR_v1_QUICK_EXCHANGE,
+	IMPAIR_v1_XAUTH_EXCHANGE,
+	IMPAIR_v1_DELETE_EXCHANGE,
+};
+
+/*
+ * Meddle with an (IKEv2) transform.
+ */
+
+enum impair_v2_transform {
+	IMPAIR_v2_TRANSFORM_NO = 0,
+	IMPAIR_v2_TRANSFORM_ALLOW_NONE,
+	IMPAIR_v2_TRANSFORM_DROP_NONE,
+	IMPAIR_v2_TRANSFORM_OMIT,
 };
 
 /*
@@ -71,14 +82,14 @@ struct impair {
 	 * transform to screw with.
 	 */
 
-	enum send_impairment ke_payload;
-	enum send_impairment ike_key_length_attribute;
-	enum send_impairment child_key_length_attribute;
+	enum impair_emit ke_payload;
+	enum impair_emit ike_key_length_attribute;
+	enum impair_emit child_key_length_attribute;
 
 	unsigned log_rate_limit;
 
-	enum send_impairment v1_hash_payload;
-	enum exchange_impairment v1_hash_exchange;
+	enum impair_emit v1_hash_payload;
+	enum impair_v1_exchange v1_hash_exchange;
 	bool v1_hash_check;
 
 	unsigned ike_initiator_spi;
@@ -108,20 +119,21 @@ struct impair {
 	bool omit_hash_notify_request;
 	bool ignore_hash_notify_request;
 	bool ignore_hash_notify_response;
-	bool ikev2_exclude_integ_none;
-	bool ikev2_include_integ_none;
+	enum impair_v2_transform v2_proposal_integ;
+	enum impair_v2_transform v2_proposal_dh;
+	unsigned ikev2_add_ike_transform;
+	unsigned ikev2_add_child_transform;
 	bool replay_duplicates;
 	bool replay_forward;
 	bool replay_backward;
 	bool replay_encrypted;
 	bool corrupt_encrypted;
 	bool proposal_parser;
-	bool add_unknown_payload_to_sa_init;
-	bool add_unknown_payload_to_auth;
-	bool add_unknown_payload_to_auth_sk;
-	bool unknown_payload_critical;
+
 	bool allow_dns_insecure;
 	bool send_pkcs7_thingie;
+	bool send_nonzero_reserved;
+	bool send_nonzero_reserved_id;
 	bool ikev1_del_with_notify;
 	bool bad_ike_auth_xchg;
 	bool rekey_initiate_supernet;
@@ -131,6 +143,10 @@ struct impair {
 
 	bool tcp_use_blocking_write;
 	bool tcp_skip_setsockopt_espintcp;
+
+	unsigned add_unknown_v2_payload_to;
+	unsigned add_unknown_v2_payload_to_sk;
+	bool unknown_v2_payload_critical;
 
 	/*
 	 * add more here
@@ -158,10 +174,11 @@ enum impair_status {
 enum impair_status parse_impair(const char *optarg, struct whack_impair *whack_impair, bool enable, const char *progname);
 
 enum impair_action {
-	IMPAIR_UPDATE,
-	INITIATE_v2_DELETE,
-	INITIATE_v2_LIVENESS,
-	INITIATE_v2_REKEY,
+	CALL_IMPAIR_UPDATE,
+	CALL_INITIATE_v2_DELETE,
+	CALL_INITIATE_v2_LIVENESS,
+	CALL_INITIATE_v2_REKEY,
+	CALL_SEND_KEEPALIVE,
 	CALL_GLOBAL_EVENT,
 	CALL_STATE_EVENT,
 };
