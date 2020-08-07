@@ -30,7 +30,7 @@ LOGIN_PROMPT = "login: $"
 LOGIN_PROMPT_TIMEOUT = 120
 
 PASSWORD = "swan"
-PASSWORD_PROMPT = "Password: $"
+PASSWORD_PROMPT = "Password:\s?$"
 PASSWORD_PROMPT_TIMEOUT = 5
 
 def mounts(domain):
