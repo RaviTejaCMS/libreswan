@@ -24,7 +24,7 @@ then
     echo 'inet6 2001:db8:1:2::23 64' >> /etc/hostname.vio0
     echo 'up' >> /etc/hostname.vio0
     echo 'inet 192.0.2.254 255.255.255.0 NONE' > /etc/hostname.vio1
-    echo 'opbsde' > /etc/myname
+    echo 'obsde' > /etc/myname
     echo '192.1.2.254' > /etc/mygate
     echo 'nameserver 192.1.2.254' >> /etc/resolv.conf
     echo 'Done Setting up Network'
@@ -53,7 +53,8 @@ echo "192.1.2.253:/home/build/lib.git/testing/ /testing nfs rw,tcp 0 0" >> /etc/
 echo "==> Mounting /testing directory <=="
 mount /testing
 #Changing the prompt
-echo "PS1='[\u@\h \W$(x=$? ; test $x -ne 0 && echo " $x")]\$ '" >> .profile
+echo "PS1='[\u@\h \W$(x=$? ; test $x -ne 0 && echo " $x")]\$ '" >> /etc/profile
+echp "export PS1" >> /etc/profile
 echo "==> Prompt Updated <=="
 echo "==> rc.firsttime ran succesfully <=="
 #echo "==> Running Script from /testing/guestbin/openbsd.sh"
