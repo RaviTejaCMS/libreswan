@@ -54,9 +54,8 @@ echo "==> Mounting /testing directory <=="
 mount /testing
 #Changing the prompt
 echo "PS1='[\u@\h \W$(x=$? ; test $x -ne 0 && echo " $x")]\$ '" >> /etc/profile
-echp "export PS1" >> /etc/profile
+echo "export PS1" >> /etc/profile
 echo "==> Prompt Updated <=="
 echo "==> rc.firsttime ran succesfully <=="
 #echo "==> Running Script from /testing/guestbin/openbsd.sh"
 #sh /testing/testing/guestbin/openbsd.sh
-
