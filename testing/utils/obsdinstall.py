@@ -6,10 +6,12 @@ import os
 import argparse
 '''parser = argparse.ArgumentParser(description='To Spin Up OpenBSD Domains')
 parser.add_argument("--ISO",required=True)'''
-ISO_PATH = 'install67.iso'
+arg=list(sys.argv)
+POOL = arg[1]
 VIRSH_NAME="openbsd-base"
-ISO_PATH_V="/var/lib/libvirt/boot/install67.iso"
-POOL=""
+ISO_NAME = arg[2]
+ISO_PATH = POOL+ISO_NAME
+ISO_URL = arg[3]
 DISK_PATH="/var/lib/libvirt/images/openbsdbase.qcow2"
 TESTING_DIR = '/home/testing'
 def es(child,expect,send,t=30):
@@ -43,7 +45,7 @@ def base():
     #We install OpenBSD 6.7 but use os-varient as openbsd6.6 as virt install dosen't support 6.7 yet :(
     VIRSH_COMMAND = 'sudo virt-install --name='+VIRSH_NAME+' --virt-type=kvm --memory=2048,maxmemory=2048 \
         --vcpus=1,maxvcpus=1 --cpu host --os-variant=openbsd6.6 \
-        --cdrom='+ISO_PATH_V+' \
+        --cdrom='+ISO_PATH+' \
         --network=bridge=virbr0,model=virtio \
         --disk path='+DISK_PATH+',size=4,bus=virtio,format=qcow2 \
         --graphics none --serial pty'
@@ -90,8 +92,9 @@ def check():
 
 #Check if iso exists
 if(not os.path.exists(ISO_PATH)):
-		print("install67.iso does not exists in this folder")
-		sys.exit()
+    print("install67.iso does not exists in this folder")
+    os.system("sudo wget --output-document "+ISO_NAME+" --no-clobber --"+ISO_URL+" -P"+POOL)
+		#sys.exit()
 #install.conf file
 if(not os.path.exists("install.conf")):
 	print("install.conf does not exists in this folder")

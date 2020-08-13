@@ -1057,7 +1057,7 @@ kvm-install: $(foreach domain, $(KVM_BUILD_DOMAIN_CLONES), uninstall-kvm-domain-
 
 .PHONY: kvm-obsd
 kvm-obsd: $(KVM_TESTINGDIR)/utils/obsdinstall.py
-	$(KVM_PYTHON) $(KVM_TESTINGDIR)/utils/obsdinstall.py
+	$(KVM_PYTHON) $(KVM_TESTINGDIR)/utils/obsdinstall.py $(KVM_POOLDIR) $(KVM_BSD_ISO) $(KVM_ISO_URL_BSD)
 
 .PHONY: kvm-bisect
 kvm-bisect:
