@@ -29,7 +29,7 @@
 KVM_GUEST_OS ?= f32
 KVM_GUEST_OS_BSD?= obsd67
 include testing/libvirt/$(KVM_GUEST_OS).mk
-include testing/libvirt/openBSD/$(KVM_GUEST_OS_BSD).mk
+include testing/libvirt/BSD/$(KVM_GUEST_OS_BSD).mk
 
 #
 # where things live and what gets created
@@ -1054,6 +1054,10 @@ kvm-install: $(foreach domain, $(KVM_BUILD_DOMAIN_CLONES), uninstall-kvm-domain-
 	$(MAKE) kvm-$(KVM_BUILD_DOMAIN)-install
 	$(MAKE) $(foreach domain, $(KVM_BUILD_DOMAIN_CLONES) $(KVM_BASIC_DOMAINS), install-kvm-domain-$(domain))
 	$(MAKE) kvm-keys
+
+.PHONY: kvm-obsd
+kvm-obsd: $(KVM_TESTINGDIR)/utils/obsdinstall.py
+	$(KVM_PYTHON) $(KVM_TESTINGDIR)/utils/obsdinstall.py
 
 .PHONY: kvm-bisect
 kvm-bisect:

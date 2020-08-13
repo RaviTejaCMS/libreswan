@@ -86,6 +86,7 @@ def base():
     child.close()
     os.system('sudo virsh destroy openbsd-base')
 def check():
+    pass
 
 #Check if iso exists
 if(not os.path.exists(ISO_PATH)):
