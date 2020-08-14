@@ -1066,16 +1066,16 @@ define kvm-clean-obsd
 	fi \
 endef
 define kvm-base-obsd
-		sed -e "s:@@TESTINGDIR@@:$(KVM_TESTINGDIR):" $(KVM_TESTINGDIR)/libvirt/BSD/rc.firsttime > $(KVM_POOLDIR)/rc.firsttime
-		cp $(KVM_TESTINGDIR)/libvirt/BSD/*.conf $(KVM_POOLDIR)/
-		sudo env -i growisofs -M "$(KVM_POOLDIR)/install67.iso" -l -R -graft-points /install.conf="$(KVM_POOLDIR)/install.conf" /etc/boot.conf="$(KVM_POOLDIR)/boot.conf" /rc.firsttime="$(KVM_POOLDIR)/rc.firsttime"
-		sudo virt-install --name=$(KVM_BSD_BASE_NAME) --virt-type=kvm --memory=2048,maxmemory=2048 \
-        --vcpus=1,maxvcpus=1 --cpu host --os-variant=$(VIRT_BSD_VARIANT) \
-        --cdrom=$(KVM_POOLDIR)/install67.iso \
-        $(VIRT_GATEWAY) \
-        --disk path=$(KVM_POOLDIR)/$(KVM_BSD_BASE_NAME).qcow2,size=4,bus=virtio,format=qcow2 \
-        --graphics none --serial pty ; \
-		$(KVM_PYTHON) $(KVM_TESTINGDIR)/utils/obsdinstall.py $(KVM_BSD_BASE_NAME) \
+	sed -e "s:@@TESTINGDIR@@:$(KVM_TESTINGDIR):" $(KVM_TESTINGDIR)/libvirt/BSD/rc.firsttime > $(KVM_POOLDIR)/rc.firsttime
+	cp $(KVM_TESTINGDIR)/libvirt/BSD/*.conf $(KVM_POOLDIR)/
+	sudo env -i growisofs -M "$(KVM_POOLDIR)/install67.iso" -l -R -graft-points /install.conf="$(KVM_POOLDIR)/install.conf" /etc/boot.conf="$(KVM_POOLDIR)/boot.conf" /rc.firsttime="$(KVM_POOLDIR)/rc.firsttime"
+	sudo virt-install --name=$(KVM_BSD_BASE_NAME) --virt-type=kvm --memory=2048,maxmemory=2048 \
+    	--vcpus=1,maxvcpus=1 --cpu host --os-variant=$(VIRT_BSD_VARIANT) \
+    	--cdrom=$(KVM_POOLDIR)/install67.iso \
+    	$(VIRT_GATEWAY) \
+		--disk path=$(KVM_POOLDIR)/$(KVM_BSD_BASE_NAME).qcow2,size=4,bus=virtio,format=qcow2 \
+    	--graphics none --serial pty ; \
+	$(KVM_PYTHON) $(KVM_TESTINGDIR)/utils/obsdinstall.py $(KVM_BSD_BASE_NAME) \
 	#This should be continued for east and west too, write that also sed for east and west
 endef
 define kvm-obsd-create
