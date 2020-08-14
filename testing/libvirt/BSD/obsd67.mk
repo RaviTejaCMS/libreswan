@@ -19,14 +19,14 @@ define kvm-clean-obsd
 endef
 
 define kvm-obsd-create
-	if [ -f "$(KVM_POOLDIR)/$(KVM_BSD_ISO)" ]; then
-	    echo "$(KVM_BSD_ISO) exists in Pool directory"
+	if [[ -f "$(KVM_POOLDIR)/$(KVM_BSD_ISO)" ]]; then \
+	    echo "$(KVM_BSD_ISO) exists in Pool directory" \ 
 	else 
 	    echo "ISO does not exist Dowloading the file"
 		wget --output-document $KVM_BSD_ISO.tmp --no-clobber -- $(KVM_ISO_URL_BSD) -P $(KVM_POOLDIR)
 		mv $KVM_BSD_ISO.tmp $KVM_BSD_ISO
 	fi
-	if ([ -z $(call kvm-clean-obsd $(KVM_BSD_BASE_NAME)) ] )
+	if [[ -z $(call kvm-clean-obsd $(KVM_BSD_BASE_NAME)) ]]
 	then
 	   echo "VM does not exist "
 	   $(call kvm-base-obsd)
