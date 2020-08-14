@@ -4,7 +4,7 @@ You can load this machine definition into libvirt using:
 -->
 
 <domain type='kvm'>
-  <name>obsdw</name>
+  <name>@@NAME@@</name>
   <memory unit='KiB'>393216</memory>
   <currentMemory unit='KiB'>393216</currentMemory>
   <vcpu placement='static'>1</vcpu>
@@ -25,7 +25,7 @@ You can load this machine definition into libvirt using:
   	<emulator>/usr/bin/qemu-system-x86_64</emulator>
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2'/>
-      <source file='/var/lib/libvirt/images/obsdw.qcow2'/>
+      <source file='@@POOLSPACE@@/@@NAME@@.qcow2'/>
       <target dev='vda' bus='virtio'/>
       <address type='pci' domain='0x0000' bus='0x00' slot='0x04' function='0x0'/>
     </disk>

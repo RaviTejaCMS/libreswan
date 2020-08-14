@@ -49,7 +49,7 @@ sh /etc/netstart
 
 echo "==> Writing NFS entires to /etc/fstab <=="
 mkdir /testing
-echo "192.1.2.253:/home/build/lib.git/testing/ /testing nfs rw,tcp 0 0" >> /etc/fstab
+echo "192.1.2.253:@@TESTINGDIR@@ /testing nfs rw,tcp 0 0" >> /etc/fstab
 echo "==> Mounting /testing directory <=="
 mount /testing
 #Changing the prompt
@@ -57,5 +57,3 @@ echo "PS1='[\u@\h \W$(x=$? ; test $x -ne 0 && echo " $x")]\$ '" >> /etc/profile
 echo "export PS1" >> /etc/profile
 echo "==> Prompt Updated <=="
 echo "==> rc.firsttime ran succesfully <=="
-#echo "==> Running Script from /testing/guestbin/openbsd.sh"
-#sh /testing/testing/guestbin/openbsd.sh
