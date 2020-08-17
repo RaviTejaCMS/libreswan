@@ -175,10 +175,13 @@ VIRT_INSTALL_COMMAND = \
 KVM_BASE_HOST = swan$(KVM_GUEST_OS)base
 
 KVM_BUILD_HOST = build
-KVM_BUILD_HOST_CLONES = $(filter-out $(KVM_BASIC_HOSTS), $(KVM_TEST_HOSTS))
+KVM_BUILD_HOST_CLONES = $(filter-out $(KVM_BASIC_HOSTS), $(KVM_LINUX_HOSTS))
 
-KVM_TEST_HOSTS = $(notdir $(wildcard testing/libvirt/vm/*[a-z]))
+KVM_LIBVIRT_HOSTS = $(notdir $(wildcard testing/libvirt/vm/*[a-z]))
+KVM_OBSD_HOSTS = $(filter obsd%, $(KVM_LIBVIRT_HOSTS))
+KVM_LINUX_HOSTS = $(filter-out obsd%, $(KVM_LIBVIRT_HOSTS))
 KVM_BASIC_HOSTS = nic
+KVM_TEST_HOSTS ?= $(KVM_LINUX_HOSTS) $(KVM_BASIC_HOSTS)
 
 KVM_LOCAL_HOSTS = $(sort $(KVM_BUILD_HOST) $(KVM_TEST_HOSTS))
 
@@ -195,6 +198,8 @@ KVM_BASIC_DOMAINS = $(call add-kvm-prefixes, $(KVM_BASIC_HOSTS))
 
 KVM_BUILD_DOMAIN = $(addprefix $(KVM_FIRST_PREFIX), $(KVM_BUILD_HOST))
 KVM_BUILD_DOMAIN_CLONES = $(call add-kvm-prefixes, $(KVM_BUILD_HOST_CLONES))
+
+KVM_OBSD_DOMAIN_CLONES = $(call add-kvm-prefixes, $(KVM_OBSD_HOSTS))
 
 KVM_TEST_DOMAINS = $(call add-kvm-prefixes, $(KVM_TEST_HOSTS))
 
@@ -836,6 +841,15 @@ $(KVM_BUILD_DISK_CLONES): \
 	$(call shadow-kvm-disk,$(KVM_LOCALDIR)/$(KVM_BUILD_DOMAIN).qcow2,$@.tmp)
 	mv $@.tmp $@
 
+KVM_OBSD_DISK_CLONES = $(addsuffix .qcow2, $(addprefix $(KVM_LOCALDIR)/, $(KVM_OBSD_DOMAIN_CLONES)))
+$(KVM_OBSD_DISK_CLONES): \
+		| \
+		$(KVM_LOCALDIR)/$(KVM_BSD_BASE_NAME).qcow2 \
+		$(KVM_LOCALDIR)
+	: copy-build-disk $@
+	$(call shadow-kvm-disk,$(KVM_LOCALDIR)/$(KVM_BSD_BASE_NAME).qcow2,$@.tmp)
+	mv $@.tmp $@
+
 #
 # Create the local domains
 #
@@ -1055,48 +1069,32 @@ kvm-install: $(foreach domain, $(KVM_BUILD_DOMAIN_CLONES), uninstall-kvm-domain-
 	$(MAKE) $(foreach domain, $(KVM_BUILD_DOMAIN_CLONES) $(KVM_BASIC_DOMAINS), install-kvm-domain-$(domain))
 	$(MAKE) kvm-keys
 
-define kvm-clean-obsd
-	tmp=$(sudo virsh list --all | grep " $1 ") \
-	if [ -z "$tmp" ] ; then \
-		echo "$1 Domain doesn't Exist"; \
-		return 0; \
-	else \
-		echo "Undefining $1" ; \
-		sudo virsh undefine $1 ; \
-	fi \
-endef
 define kvm-base-obsd
+	$(call destroy-kvm-domain,$(KVM_BSD_BASE_NAME))
 	sed -e "s:@@TESTINGDIR@@:$(KVM_TESTINGDIR):" $(KVM_TESTINGDIR)/libvirt/BSD/rc.firsttime > $(KVM_POOLDIR)/rc.firsttime
 	cp $(KVM_TESTINGDIR)/libvirt/BSD/*.conf $(KVM_POOLDIR)/
 	sudo env -i growisofs -M "$(KVM_POOLDIR)/install67.iso" -l -R -graft-points /install.conf="$(KVM_POOLDIR)/install.conf" /etc/boot.conf="$(KVM_POOLDIR)/boot.conf" /rc.firsttime="$(KVM_POOLDIR)/rc.firsttime"
-	sudo virt-install --name=$(KVM_BSD_BASE_NAME) --virt-type=kvm --memory=2048,maxmemory=2048 \
+	$(KVM_PYTHON) $(KVM_TESTINGDIR)/utils/obsdinstall.py $(KVM_BSD_BASE_NAME) \
+	"sudo virt-install --name=$(KVM_BSD_BASE_NAME) --virt-type=kvm --memory=2048,maxmemory=2048 \
     	--vcpus=1,maxvcpus=1 --cpu host --os-variant=$(VIRT_BSD_VARIANT) \
     	--cdrom=$(KVM_POOLDIR)/install67.iso \
     	$(VIRT_GATEWAY) \
-		--disk path=$(KVM_POOLDIR)/$(KVM_BSD_BASE_NAME).qcow2,size=4,bus=virtio,format=qcow2 \
-    	--graphics none --serial pty ; \
-	$(KVM_PYTHON) $(KVM_TESTINGDIR)/utils/obsdinstall.py $(KVM_BSD_BASE_NAME) \
-	#This should be continued for east and west too, write that also sed for east and west xml files
+	--disk path=$(KVM_POOLDIR)/$(KVM_BSD_BASE_NAME).qcow2,size=4,bus=virtio,format=qcow2 \
+    	--graphics none --serial pty --check path_in_use=off"
 endef
-define kvm-obsd-create
-	if [[ -f "$(KVM_POOLDIR)/$(KVM_BSD_ISO)" ]]; then \
-	    echo "$(KVM_BSD_ISO) exists in Pool directory" ; \
-	else \
-	    echo "ISO does not exist Dowloading the file" ; \
-		wget --output-document $KVM_BSD_ISO.tmp --no-clobber -- $(KVM_ISO_URL_BSD) -P $(KVM_POOLDIR) ; \
-		mv $KVM_BSD_ISO.tmp $KVM_BSD_ISO \
-	fi \
-	if [[ -z $$(call kvm-clean-obsd,$(KVM_BSD_BASE_NAME)) ]]; then \
-		$(call kvm-base-obsd) \
-	else \
-	    echo "VM is running!" ; \
-		echo "Undefining VM" ; \
-	fi \
-endef
+$(KVM_POOLDIR)/$(KVM_BSD_ISO):
+	wget --output-document $(KVM_BSD_ISO).tmp --no-clobber -- $(KVM_ISO_URL_BSD) -P $(KVM_POOLDIR) 
+	mv $(KVM_BSD_ISO).tmp $(KVM_BSD_ISO)
 
+.PHONY: kvm-uninstall-obsd
+kvm-uninstall-obsd:
+	$(call destroy-kvm-domain,$(KVM_BSD_BASE_NAME))
+	rm -f $(KVM_LOCALDIR)/$(KVM_BSD_BASE_NAME).qcow2
 .PHONY: kvm-obsd
-kvm-obsd: $(KVM_TESTINGDIR)/utils/obsdinstall.py
-	$(call kvm-obsd-create)
+kvm-obsd: $(KVM_LOCALDIR)/$(KVM_BSD_BASE_NAME).qcow2
+$(KVM_LOCALDIR)/$(KVM_BSD_BASE_NAME).qcow2: $(KVM_TESTINGDIR)/utils/obsdinstall.py $(KVM_POOLDIR)/$(KVM_BSD_ISO)
+	$(call kvm-base-obsd)
+	
 
 .PHONY: kvm-bisect
 kvm-bisect:
