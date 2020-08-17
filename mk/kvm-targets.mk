@@ -1076,7 +1076,7 @@ define kvm-base-obsd
 		--disk path=$(KVM_POOLDIR)/$(KVM_BSD_BASE_NAME).qcow2,size=4,bus=virtio,format=qcow2 \
     	--graphics none --serial pty ; \
 	$(KVM_PYTHON) $(KVM_TESTINGDIR)/utils/obsdinstall.py $(KVM_BSD_BASE_NAME) \
-	#This should be continued for east and west too, write that also sed for east and west
+	#This should be continued for east and west too, write that also sed for east and west xml files
 endef
 define kvm-obsd-create
 	if [[ -f "$(KVM_POOLDIR)/$(KVM_BSD_ISO)" ]]; then \
