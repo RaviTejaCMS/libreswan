@@ -1082,9 +1082,9 @@ define kvm-base-obsd
 	--disk path=$(KVM_POOLDIR)/$(KVM_BSD_BASE_NAME).qcow2,size=4,bus=virtio,format=qcow2 \
     	--graphics none --serial pty --check path_in_use=off"
 endef
-$(KVM_POOLDIR)/$(KVM_BSD_ISO):
-	wget --output-document $(KVM_BSD_ISO).tmp --no-clobber -- $(KVM_ISO_URL_BSD) -P $(KVM_POOLDIR) 
-	mv $(KVM_BSD_ISO).tmp $(KVM_BSD_ISO)
+$(KVM_POOLDIR)/$(KVM_BSD_ISO):| $(KVM_POOLDIR)
+	wget --output-document $@.tmp --no-clobber -- $(KVM_ISO_URL_BSD)
+	mv $@.tmp $@
 
 .PHONY: kvm-uninstall-obsd
 kvm-uninstall-obsd:
