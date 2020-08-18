@@ -1092,6 +1092,7 @@ kvm-uninstall-obsd:
 .PHONY: kvm-obsd
 kvm-obsd: $(KVM_LOCALDIR)/$(KVM_BSD_BASE_NAME).qcow2
 $(KVM_LOCALDIR)/$(KVM_BSD_BASE_NAME).qcow2: $(KVM_TESTINGDIR)/utils/obsdinstall.py $(KVM_POOLDIR)/$(KVM_BSD_ISO)
+	$(make kvm-uninstall-obsd)
 	$(call kvm-base-obsd)
 	
 
