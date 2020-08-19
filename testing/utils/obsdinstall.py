@@ -35,7 +35,10 @@ es(child,'#','cp /mnt/rc.firsttime /')
 es(child,'# ','umount /mnt')
 #Installing by taking deafult params from install.conf file
 es(child,'# ','install -af /install.conf')
-es(child,'.*bsd-base# ','mv rc.firsttime /mnt/etc/',150)
+#This is to check if all the installation files got copied(because it's slow on some systems)
+while(child.expect([".*install has been successfully completed!", pexpect.EOF, pexpect.TIMEOUT],timeout=10)!=0):
+        continue
+es(child,'.*bsd-base# ','mv rc.firsttime /mnt/etc/',100)
 es(child,'.*bsd-base# ','echo "iked_flags=YES" >> /mnt/etc/rc.conf.local')
 print('====> Shutting Down Base Domain <====')
 es(child,'.*bsd-base# ','halt -p\n')
