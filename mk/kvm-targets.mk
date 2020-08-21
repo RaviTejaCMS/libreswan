@@ -1089,8 +1089,6 @@ $(KVM_POOLDIR)/$(KVM_BSD_ISO):| $(KVM_POOLDIR)
 kvm-uninstall-obsd:
 	$(call destroy-kvm-domain,$(KVM_BSD_BASE_NAME))
 	rm -f $(KVM_LOCALDIR)/$(KVM_BSD_BASE_NAME).qcow2
-	$(foreach domain, $(KVM_OBSD_HOSTS), \
-	$(eval $(call uninstall-kvm-domain-DOMAIN,$(domain),$(KVM_POOLDIR))))
 .PHONY: kvm-obsd
 kvm-obsd: $(KVM_LOCALDIR)/$(KVM_BSD_BASE_NAME).qcow2
 $(KVM_LOCALDIR)/$(KVM_BSD_BASE_NAME).qcow2: $(KVM_TESTINGDIR)/utils/obsdinstall.py $(KVM_POOLDIR)/$(KVM_BSD_ISO)
