@@ -81,7 +81,7 @@ def mount_point(domain, console, device):
         mount = fstab[device]
         domain.logger.debug("using fstab entry for %s (%s) from cache", device, mount)
         return mount;
-    if("obsd" in domain):
+    if("obsd" in str(domain)):
         console.sendline("df -t nfs | awk 'NR==2 {print $6}'")
     else:
         console.sendline("df --output=source,target | awk '$1==\"" + device + "\" { print $2 }'")
