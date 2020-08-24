@@ -33,6 +33,11 @@ You can load this machine definition into libvirt using:
     </controller>
     <controller type='virtio-serial' index='0'>
     </controller>
+    <!--OpenBSD uses NFS mount this filesystem is defined here just to hack some part of testing script to work-->
+    <filesystem type='mount' accessmode='squash'>
+      <source dir='@@TESTINGDIR@@'/>
+      <target dir='testing'/>
+    </filesystem>
     <interface type='network'>
       <mac address='12:00:00:64:64:45'/>
       <source network='192_1_2'/>

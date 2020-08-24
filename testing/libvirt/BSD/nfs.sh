@@ -1,4 +1,5 @@
 #!/bin/bash
+#this works for only Fedora AFAIK
 set -e
 if grep -qF "192.1.2.0/24" /etc/exports;then
    echo "fstab entry already exists"
