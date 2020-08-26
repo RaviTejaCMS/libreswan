@@ -65,7 +65,7 @@ done
 west #
  # check output on openbsd end
 west #
- test -f /sbin/ipsecctl && ipsecctl -s all
+ test -f /sbin/ipsecctl && ipsecctl -s all | sort
 west #
  ../bin/check-for-core.sh
 west #
