@@ -1,4 +1,4 @@
 #!/bin/sh
 
 . ../../default-testparams.sh
-OBSDE_CONSOLE_FIXUPS="$REF_CONSOLE_FIXUPS openbsd.sed"
+OPENBSDE_CONSOLE_FIXUPS="$REF_CONSOLE_FIXUPS openbsd.sed"
