@@ -24,7 +24,7 @@ then
     echo 'inet6 2001:db8:1:2::23 64' >> /etc/hostname.vio0
     echo 'up' >> /etc/hostname.vio0
     echo 'inet 192.0.2.254 255.255.255.0 NONE' > /etc/hostname.vio1
-    echo 'obsde' > /etc/myname
+    echo 'openbsde' > /etc/myname
     echo '192.1.2.254' > /etc/mygate
     echo 'nameserver 192.1.2.254' >> /etc/resolv.conf
     echo 'Done Setting up Network'
@@ -37,7 +37,7 @@ then
     echo 'inet6 2001:db8:1:2::45 64' >> /etc/hostname.vio0
     echo 'up' >> /etc/hostname.vio0
     echo 'inet 192.0.1.254 255.255.255.0 NONE' > /etc/hostname.vio1
-    echo 'obsdw' > /etc/myname
+    echo 'openbsdw' > /etc/myname
     echo '192.1.2.254' > /etc/mygate
     echo 'nameserver 192.1.2.254' >> /etc/resolv.conf
     echo 'Done Setting up Network'

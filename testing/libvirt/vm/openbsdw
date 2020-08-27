@@ -1,6 +1,6 @@
 <!--
 You can load this machine definition into libvirt using:
-	sudo virsh define obsde.xml
+	sudo virsh define openbsdw.xml
 -->
 
 <domain type='kvm'>
@@ -39,13 +39,13 @@ You can load this machine definition into libvirt using:
       <target dir='testing'/>
     </filesystem>
     <interface type='network'>
-      <mac address='12:00:00:64:64:23'/>
+      <mac address='12:00:00:64:64:45'/>
       <source network='192_1_2'/>
       <model type='virtio'/>
     </interface>
     <interface type='network'>
-      <mac address='12:00:00:dc:bc:ff'/>
-      <source network='192_0_2'/>
+      <mac address='12:00:00:ab:cd:ff'/>
+      <source network='192_0_1'/>
       <model type='virtio'/>
     </interface>
     <serial type='pty'>
