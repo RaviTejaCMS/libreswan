@@ -1,6 +1,7 @@
 # Stuff to talk to virsh, for libreswan
 #
 # Copyright (C) 2015-2019  Andrew Cagney
+# Copyright (C) 2020  Ravi Teja
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
@@ -81,11 +82,16 @@ def mount_point(domain, console, device):
         mount = fstab[device]
         domain.logger.debug("using fstab entry for %s (%s) from cache", device, mount)
         return mount;
+    #if domain is OpenBSD
     if("bsd" in str(domain)):
-        console.sendline("df -t nfs | awk 'NR==2 {print $6}'")
+        try:
+            console.sendline("df -t nfs | awk 'NR==2 {print $6}'")
+            status, match = console.expect_prompt("(/\S+)")
+        except:
+            print("NFS is Mounted on OpenBSD!?")
     else:
         console.sendline("df --output=source,target | awk '$1==\"" + device + "\" { print $2 }'")
-    status, match = console.expect_prompt("(/\S+)")
+        status, match = console.expect_prompt("(/\S+)")
     mount = match.group(1)
     fstab[device] = mount
     domain.logger.debug("fstab has device '%s' mounted on '%s'", device, mount)

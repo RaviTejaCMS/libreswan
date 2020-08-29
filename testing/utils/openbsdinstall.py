@@ -1,4 +1,20 @@
-#!/bin/python
+#!/usr/bin/env python3
+
+# pexpect script to Install OpenBSD base Domain
+#
+# Copyright (C) 2020 Ravi Teja <hello@rtcms.dev>
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 2 of the License, or (at your
+# option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+# or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+# for more details.
+
+
 import pexpect
 import sys
 import time
@@ -26,7 +42,6 @@ time.sleep(10)
 #REGx for Installation prompt
 #To enter Shell mode
 es(child,'.*hell?','S')
-#Expect prompt
 #Mounting of drive where install.conf file is present
 es(child,'# ','mount /dev/cd0c /mnt')
 #Copying of install.conf file
@@ -38,11 +53,15 @@ es(child,'# ','install -af /install.conf')
 #This is to check if all the installation files got copied(because it's slow on some systems)
 while(child.expect([".*install has been successfully completed!", pexpect.EOF, pexpect.TIMEOUT],timeout=10)!=0):
         continue
+#To copy rc.girsttime file in the right directory
 es(child,'.*bsd-base# ','mv rc.firsttime /mnt/etc/',100)
+#to enable iked
 es(child,'.*bsd-base# ','echo "iked_flags=YES" >> /mnt/etc/rc.conf.local')
 print('====> Shutting Down Base Domain <====')
+#To shutdown the base domain
 es(child,'.*bsd-base# ','halt -p\n')
-#This is because OpenBSD machine is not getting shutdown :/
+print("Waiting 10 seconds to shutdown...")
 time.sleep(10)
 child.close()
-os.system('sudo virsh destroy '+KVM_BSD_BASE_NAME)
+#To force shutdown the base domain via virt manager
+os.system('sudo virsh destroy '+KVM_BSD_BASE_NAME+' > /dev/null')
