@@ -48,6 +48,24 @@ KVM_WORKERS ?= 1
 KVM_GROUP ?= qemu
 #KVM_PYTHON ?= PYTHONPATH=/home/python/pexpect:/home/python/ptyprocess /home/python/v3.8/bin/python3
 KVM_PIDFILE ?= kvmrunner.pid
+KVM_UID ?= $(shell id -u)
+KVM_GID ?= $(shell id -g $(KVM_GROUP))
+
+# The alternative is qemu:///session and it doesn't require root.
+# However, it has never been used, and the python tools all assume
+# qemu://system. Finally, it comes with a warning: QEMU usermode
+# session is not the virt-manager default.  It is likely that any
+# pre-existing QEMU/KVM guests will not be available.  Networking
+# options are very limited.
+
+KVM_CONNECTION ?= qemu:///system
+
+VIRSH = sudo virsh --connect $(KVM_CONNECTION)
+
+
+#
+# Makeflags passed to the KVM build
+#
 
 # Should these live in the OS.mk file?
 KVM_USE_EFENCE ?= true
@@ -67,13 +85,6 @@ KVM_MAKEFLAGS ?= \
 	SD_RESTART_TYPE=$(KVM_SD_RESTART_TYPE) \
 	USE_NSS_KDF=$(KVM_USE_NSS_KDF) \
 	USE_FIPSCHECK=$(KVM_USE_FIPSCHECK)
-
-KVM_UID ?= $(shell id -u)
-KVM_GID ?= $(shell id -g $(KVM_GROUP))
-
-# targets for dumping the above
-.PHONY: print-kvm-prefixes
-print-kvm-prefixes: ; @echo "$(KVM_PREFIXES)"
 
 
 #
@@ -168,6 +179,14 @@ VIRT_INSTALL_COMMAND = \
 	$(VIRT_POOLDIR) \
 	--noreboot
 
+
+# To avoid the problem where the host has no "default" KVM network
+# (there's a rumour that libreswan's main testing machine has this
+# problem) define a dedicated swandefault gateway.
+
+KVM_GATEWAY ?= swandefault
+
+
 #
 # Hosts
 #
@@ -179,13 +198,14 @@ KVM_BUILD_HOST_CLONES = $(filter-out $(KVM_BASIC_HOSTS), $(KVM_LINUX_HOSTS))
 
 KVM_LIBVIRT_HOSTS = $(notdir $(wildcard testing/libvirt/vm/*[a-z]))
 KVM_OPENBSD_HOSTS = $(filter openbsd%, $(KVM_LIBVIRT_HOSTS))
-KVM_LINUX_HOSTS = $(filter-out openbsd%, $(KVM_LIBVIRT_HOSTS))
+KVM_LINUX_HOSTS = $(filter-out $(KVM_BASIC_HOSTS), $(filter-out openbsd%, $(KVM_LIBVIRT_HOSTS)))
 KVM_BASIC_HOSTS = nic
 KVM_TEST_HOSTS ?= $(KVM_LINUX_HOSTS) $(KVM_BASIC_HOSTS)
 
 KVM_LOCAL_HOSTS = $(sort $(KVM_BUILD_HOST) $(KVM_TEST_HOSTS))
 
 KVM_HOSTS = $(KVM_BASE_HOST) $(KVM_LOCAL_HOSTS)
+
 
 #
 # Domains
@@ -1072,16 +1092,15 @@ kvm-install: $(foreach domain, $(KVM_BUILD_DOMAIN_CLONES), uninstall-kvm-domain-
 define kvm-base-openbsd
 	$(call destroy-kvm-domain,$(KVM_BSD_BASE_NAME))
 	sed -e "s:@@TESTINGDIR@@:$(KVM_TESTINGDIR):" $(KVM_TESTINGDIR)/libvirt/BSD/rc.firsttime > $(KVM_POOLDIR)/rc.firsttime
-	sed -e "s:@@TESTINGDIR@@:$(KVM_TESTINGDIR):" $(KVM_TESTINGDIR)/libvirt/BSD/nfs.sh > $(KVM_POOLDIR)/nfs.sh
-	sh $(KVM_POOLDIR)/nfs.sh
+	sh $(KVM_TESTINGDIR)/libvirt/BSD/nfs.sh
 	cp $(KVM_TESTINGDIR)/libvirt/BSD/*.conf $(KVM_POOLDIR)/
 	sudo env -i growisofs -M "$(KVM_POOLDIR)/install67.iso" -l -R -graft-points /install.conf="$(KVM_POOLDIR)/install.conf" /etc/boot.conf="$(KVM_POOLDIR)/boot.conf" /rc.firsttime="$(KVM_POOLDIR)/rc.firsttime"
 	$(KVM_PYTHON) $(KVM_TESTINGDIR)/utils/openbsdinstall.py $(KVM_BSD_BASE_NAME) \
-	"sudo virt-install --name=$(KVM_BSD_BASE_NAME) --virt-type=kvm --memory=2048,maxmemory=2048 \
-    	--vcpus=1,maxvcpus=1 --cpu host --os-variant=$(VIRT_BSD_VARIANT) \
-    	--cdrom=$(KVM_POOLDIR)/install67.iso \
+		"sudo virt-install --name=$(KVM_BSD_BASE_NAME) --virt-type=kvm --memory=2048,maxmemory=2048 \
+		--vcpus=1,maxvcpus=1 --cpu host --os-variant=$(VIRT_BSD_VARIANT) \
+		--cdrom=$(KVM_POOLDIR)/install67.iso \
 		--disk path=$(KVM_POOLDIR)/$(KVM_BSD_BASE_NAME).qcow2,size=4,bus=virtio,format=qcow2 \
-    	--graphics none --serial pty --check path_in_use=off"
+		--graphics none --serial pty --check path_in_use=off"
 endef
 $(KVM_POOLDIR)/$(KVM_BSD_ISO):| $(KVM_POOLDIR)
 	wget --output-document $@.tmp --no-clobber -- $(KVM_ISO_URL_BSD)
@@ -1096,7 +1115,6 @@ kvm-openbsd: $(KVM_LOCALDIR)/$(KVM_BSD_BASE_NAME).qcow2
 $(KVM_LOCALDIR)/$(KVM_BSD_BASE_NAME).qcow2: $(KVM_TESTINGDIR)/utils/openbsdinstall.py $(KVM_POOLDIR)/$(KVM_BSD_ISO)
 	$(make kvm-uninstall-openbsd)
 	$(call kvm-base-openbsd)
-	
 
 .PHONY: kvm-bisect
 kvm-bisect:
@@ -1211,32 +1229,44 @@ Configuration:
 
     $(call kvm-var-value,KVM_SOURCEDIR)
     $(call kvm-var-value,KVM_TESTINGDIR)
-    $(call kvm-var-value,KVM_PREFIXES)
-    $(call kvm-var-value,KVM_WORKERS)
-    $(call kvm-var-value,KVM_GROUP)
-    $(call kvm-var-value,KVM_UID)
-    $(call kvm-var-value,KVM_GID)
-    $(call kvm-var-value,KVM_CONNECTION)
-    $(call kvm-var-value,KVM_MAKEFLAGS)
-    $(call kvm-var-value,KVM_POOLDIR)$(if $(wildcard $(KVM_POOLDIR)),, [MISSING])
-	default directory for storing VM files
     $(call kvm-var-value,KVM_POOLDIR)$(if $(wildcard $(KVM_POOLDIR)),, [MISSING])
 	directory for storing the shared base VM;
 	should be relatively permanent storage
     $(call kvm-var-value,KVM_LOCALDIR)$(if $(wildcard $(KVM_LOCALDIR)),, [MISSING])
 	directory for storing the VMs local to this build tree;
 	can be temporary storage (for instance /tmp)
+    $(call kvm-var-value,KVM_PREFIXES)
+    $(call kvm-var-value,KVM_WORKERS)
+    $(call kvm-var-value,KVM_GROUP)
+    $(call kvm-var-value,KVM_PIDFILE)
+    $(call kvm-var-value,KVM_UID)
+    $(call kvm-var-value,KVM_GID)
+    $(call kvm-var-value,KVM_CONNECTION)
+    $(call kvm-var-value,KVM_VIRSH)
+    $(call kvm-var-value,KVM_MAKEFLAGS)
     $(call kvm-var-value,KVM_GATEWAY)
 	the shared NATting gateway;
 	used by the base domain along with any local domains
 	when internet access is required
     $(call kvm-var-value,KVM_GUEST_OS)
     $(call kvm-var-value,KVM_KICKSTART_FILE)
-    $(call kvm-var-value,KVM_GATEWAY)
+
+    $(call kvm-var-value,KVM_LIBVIRT_HOSTS)
+    $(call kvm-var-value,KVM_OPENBSD_HOSTS)
+    $(call kvm-var-value,KVM_LINUX_HOSTS)
+    $(call kvm-var-value,KVM_BASIC_HOSTS)
+
     $(call kvm-var-value,KVM_BASE_HOST)
     $(call kvm-var-value,KVM_BASE_DOMAIN)
+    $(call kvm-var-value,KVM_BASE_DOMAIN_CLONES)
+
     $(call kvm-var-value,KVM_BUILD_HOST)
+    $(call kvm-var-value,KVM_BUILD_HOST_CLONES)
     $(call kvm-var-value,KVM_BUILD_DOMAIN)
+    $(call kvm-var-value,KVM_BUILD_DOMAIN_CLONES)
+
+    $(call kvm-var-value,KVM_OPENBSD_DOMAIN_CLONES)
+
     $(call kvm-var-value,KVM_TEST_SUBNETS)
     $(call kvm-var-value,KVM_TEST_NETWORKS)
     $(call kvm-var-value,KVM_TEST_NETWORK_FILES)
